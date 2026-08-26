@@ -240,7 +240,7 @@ one commit. Current state:
 - [x] `DESIGN.md`, `CLAUDE.md`, README
 - [x] Step 0: environment, skeleton, corpus download script
 - [x] Step 1: `config.py`
-- [ ] Step 2: `adapters/`
+- [x] Step 2: `adapters/`
 - [ ] Step 3: `tokenizer/`
 - [ ] Step 4: `data/prepare.py`
 - [ ] Step 5: `model.py`
