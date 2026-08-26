@@ -13,3 +13,13 @@ target
 .DS_Store
 /.claude/
 *.orig
+
+# --- tiny-gpt-trainer ---
+.venv/
+data/raw/
+data/tokens/
+checkpoints/
+logs/
+vocab.json
+*.npy
+*.npz

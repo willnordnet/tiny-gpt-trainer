@@ -1,0 +1,7 @@
+# Deliberately minimal. Per CLAUDE.md, nothing heavier gets added without
+# asking first: the point of this project is that the transformer, the
+# tokenizer, and the training loop are hand-written, not imported.
+
+mlx>=0.20          # array/NN library, Apple Silicon GPU via Metal
+numpy>=1.26        # only for reading/writing .npy token shards
+pytest>=8.0        # fast plumbing tests, see DESIGN.md section 6.1
