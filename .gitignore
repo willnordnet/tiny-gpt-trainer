@@ -1,0 +1,15 @@
+__pycache__/
+*.bin
+*.pyc
+target
+.idea
+*.iml
+/Dockerfile
+/Dockerfile.build
+/docker-compose.yml
+.classpath
+.project
+.settings
+.DS_Store
+/.claude/
+*.orig
