@@ -69,6 +69,14 @@ the 256 single-byte tokens, which means any input is encodable and there is no
 UNK token to reason about, then repeatedly merges the most frequent adjacent
 pair until the vocab is full.
 
+Text is pre-tokenized into words (GPT-2's regex) before merging, so merges are
+only ever learned *within* a word and never across a word boundary. Without
+that restriction BPE would learn `" the cat"` as one token, spending vocabulary
+on phrases instead of on reusable sub-word pieces. It is also what makes the
+pure-Python trainer fast enough to be practical: the corpus collapses to 15,056
+distinct words, so each of the 3,840 merge passes does ~20x less work than it
+would over the raw byte sequence.
+
 Vocab size 4096 is chosen so the embedding table stays a modest fraction of a
 tiny model. There are no special tokens: paragraph boundaries survive as a
 literal blank line in the token stream, so the model learns the boundary from
@@ -77,11 +85,15 @@ data instead of from a reserved id.
 Expect to see the merges scroll past, which is the interesting part:
 
 ```
-[bpe] merge  100/3840  (b'e', b' ')  count=12043  -> 'e '
-[bpe] merge  200/3840  (b'th', b'e') count= 8871  -> 'the'
-...
-[bpe] done. vocab=4096  bytes/token=3.41
-[bpe] round trip ok: 'To be, or not to be' -> 7 ids -> 'To be, or not to be'
+[bpe] corpus: 1,100,949 bytes, 283,390 word occurrences, 15,056 distinct words
+[bpe] learning 3,840 merges -> vocab_size=4096
+[bpe] merge     1/3840  count= 23,837  -> ' t'      (45 merges/s, eta 85s)
+[bpe] merge  1000/3840  count=     90  -> 'TRANIO'  (59 merges/s, eta 48s)
+[bpe] merge  3500/3840  count=     14  -> ' Jove'   (66 merges/s, eta 5s)
+[bpe] learned 3,840 merges in 57.2s
+[tokenizer] saved vocab.json (vocab_size=4096, fingerprint=f12702e48a5a)
+[bpe] round trip: ok
+[bpe] compression: 1,100,949 bytes -> 329,647 tokens (3.34 bytes/token)
 ```
 
 ### 2. Prepare token shards
@@ -241,7 +253,7 @@ one commit. Current state:
 - [x] Step 0: environment, skeleton, corpus download script
 - [x] Step 1: `config.py`
 - [x] Step 2: `adapters/`
-- [ ] Step 3: `tokenizer/`
+- [x] Step 3: `tokenizer/`
 - [ ] Step 4: `data/prepare.py`
 - [ ] Step 5: `model.py`
 - [ ] Step 6: `train.py`
