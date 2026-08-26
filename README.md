@@ -238,7 +238,7 @@ This repo is being built step by step as a readable sequence, not dropped in
 one commit. Current state:
 
 - [x] `DESIGN.md`, `CLAUDE.md`, README
-- [ ] Step 0: environment, skeleton, corpus download script
+- [x] Step 0: environment, skeleton, corpus download script
 - [ ] Step 1: `config.py`
 - [ ] Step 2: `adapters/`
 - [ ] Step 3: `tokenizer/`
