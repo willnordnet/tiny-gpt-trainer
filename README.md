@@ -111,11 +111,30 @@ contiguous (the last 10% of tokens is held out) rather than random, because
 training windows overlap and a shuffled split would leak validation tokens
 into training.
 
+Note the compression ratio here (3.24 bytes/token) is slightly worse than the
+tokenizer reported (3.34), and the difference is entirely accounted for: the
+7,221 paragraph separators cost 2 tokens each, because GPT-2's pre-tokenization
+regex splits `"\n\n"` into two separate whitespace words. 329,647 + 14,442 =
+344,089 exactly. That is the price of using a literal blank line as a boundary
+instead of a special token, and it is a cheap price.
+
+Windows are sliced at batch time rather than baked into the file. Pre-packing
+at stride 1 would store every token `context_len` times over, and pre-packing
+at stride `context_len` would throw away most of the 309,425 available windows.
+
+A `meta.json` alongside the shards records which tokenizer built them. Training
+and sampling check it, because a vocabulary mismatch does not crash: ids stay
+in range, every shape stays valid, and the model just reads and writes
+gibberish. Gibberish being the *expected* output of a model this size, there
+would otherwise be no symptom to notice.
+
 ```
-[prepare] 1 file, 3421 paragraph chunks
-[prepare] 1115394 bytes -> 327061 tokens  (3.41 bytes/token)
-[prepare] train 294355 tokens, val 32706 tokens
-[prepare] 294099 distinct training windows at context_len=256
+[adapter] total 7,222 chunks, mean 152.4 chars/chunk
+[prepare] 1,115,391 bytes -> 344,089 tokens (3.24 bytes/token)
+[prepare] train 309,681 tokens, val 34,408 tokens (10% held out, contiguous tail)
+[prepare] 309,425 training windows and 34,152 validation windows at context_len=256
+[prepare] first 48 training tokens decode to:
+[prepare]   'First Citizen:\nBefore we proceed any further, hear me speak.\n\nAll:\nSp'
 ```
 
 ### 3. Train
@@ -254,7 +273,7 @@ one commit. Current state:
 - [x] Step 1: `config.py`
 - [x] Step 2: `adapters/`
 - [x] Step 3: `tokenizer/`
-- [ ] Step 4: `data/prepare.py`
+- [x] Step 4: `data/prepare.py`
 - [ ] Step 5: `model.py`
 - [ ] Step 6: `train.py`
 - [ ] Step 7: `sample.py`
