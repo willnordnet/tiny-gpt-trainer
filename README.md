@@ -207,17 +207,114 @@ descending fast, which looks like a broken model but is not one.
 
 ```bash
 python sample.py \
-  --checkpoint checkpoints/tiny-step1000.safetensors \
+  --checkpoint checkpoints/tiny-step400.safetensors \
   --prompt "ROMEO:" \
-  --max-tokens 200 \
+  --max-tokens 120 \
   --temperature 0.8 \
   --top-k 40
 ```
 
 Temperature, top-k, and top-p are implemented directly rather than hidden
 behind a library call, so the mechanics of autoregressive generation are
-visible and tweakable. The sampling parameters are logged above the generation,
-so it is always clear *why* a given output looks the way it does.
+visible and tweakable. The parameters are echoed above every generation, so it
+is always clear *why* a given output looks the way it does:
+
+```
+sampling parameters
+  checkpoint    checkpoints/tiny-step400.safetensors
+  preset        tiny (5.87M params, context 256)
+  trained to    step 400, val loss 4.400514
+  prompt        'ROMEO:'
+  max_tokens    120
+  temperature   0.8  (sharpened, more confident and more repetitive than trained)
+  top_k         40  (only the top 40 tokens eligible)
+  top_p         1.0  (off, full tail eligible)
+  seed          0
+
+--- sample 1 of 1 ----------------------------------------
+ROMEO:
+Song, and Dis.
+
+KING RICHARD III:
+If it be well, sir, that are but a son.
+
+QUEEN:
+Bring, gentle sir: you may I be a cause,
+And I do so; this is not so.
+--- 120 tokens in 0.34s (351.4 tok/s, no KV cache)
+```
+
+Note the throughput. Training pushes ~36,000 tok/s; sampling manages ~400.
+Generation is batch-of-one and there is no KV cache, so every new token re-runs
+the whole forward pass over the entire prefix. That is O(n²) work for an
+n-token sample, and it is a deliberate omission: a cache is a performance
+optimisation with no effect on what the model says, and adding one would put a
+second, subtly different attention path in the codebase.
+
+**What the knobs actually do.** Each reshapes the next-token distribution
+before a token is drawn from it:
+
+| Flag | Effect | Reach for it when |
+|---|---|---|
+| `--temperature` | Divides the logits. Below 1 sharpens the distribution, above 1 flattens it. Never reorders tokens. | Trading coherence against variety |
+| `--top-k` | Keeps the k highest-scoring tokens, rest get zero probability. Reads only the ranking, so temperature does not change what it keeps. | You want a hard cap on how weird the choice can get |
+| `--top-p` | Keeps the smallest set of tokens covering p of the probability mass. The *count* varies with the shape of the distribution. | You want the cap to relax when the model is genuinely torn and tighten when it is confident |
+
+`--temperature 0` is greedy decoding (always the argmax) and is exactly
+reproducible. It is also the clearest demonstration of why nobody ships greedy
+decoding:
+
+```
+ROMEO:
+I'll not, sir, I'll not be so.
+
+KING RICHARD III:
+I am a man of a man: I'll not be a man.
+
+KING RICHARD III:
+I am a man of a man: I'll not be a man.
+```
+
+That loop is not a bug. Greedy decoding is deterministic given the prefix, so
+the moment the model produces a state it has been in before, it must produce
+the same continuation, forever. Randomness is not decoration here, it is what
+breaks the cycle.
+
+Top-p on the same checkpoint, at the temperature the model was actually trained
+at:
+
+```bash
+python sample.py --checkpoint checkpoints/tiny-step400.safetensors \
+  --prompt "QUEEN:" --temperature 1.0 --top-k 0 --top-p 0.9 --num-samples 2
+```
+
+```
+QUEEN:
+Svail me not! the nature I know the crown,
+I would can seek thee: hath he been stines
+In our till he stands 't and open this.
+
+JOHN OF YORK:
+What is thy action: here I came in love,
+And ill fruit that do so stands at all,
+```
+
+Run `python sample.py` with no `--checkpoint` and it demonstrates the knobs on
+two hand-written distributions instead, no model required. This is the fastest
+way to see the difference between top-k and top-p:
+
+```
+A CONFIDENT distribution (one clear winner)
+  top_k=3                        0.598  0.269  0.133    -      -      -     [3 eligible]
+  top_p=0.90                     0.598  0.269  0.133    -      -      -     [3 eligible]
+
+A TORN distribution (no clear winner), same settings
+  top_k=3                        0.367  0.332  0.301    -      -      -     [3 eligible]
+  top_p=0.90                     0.214  0.193  0.175  0.158  0.143  0.117   [6 eligible]
+
+    top_k=3    kept 3 tokens when confident, 3 when torn.  Always 3.
+    top_p=0.90 kept 3 tokens when confident, 6 when torn.  It follows the shape.
+```
 
 ## Model presets
 
@@ -248,6 +345,7 @@ python -m adapters.plain_text      # chunking, on an inline sample string
 python -m tokenizer.tokenizer      # trains a tiny vocab, shows a round trip
 python model.py                    # guided tour of RMSNorm/RoPE/SwiGLU/causality
 python config.py                   # parameter count breakdown per preset
+python sample.py                   # temperature/top-k/top-p demo, no model needed
 ```
 
 `python model.py` is worth running before anything else. It does not just prove
@@ -339,7 +437,7 @@ one commit. Current state:
 - [x] Step 4: `data/prepare.py`
 - [x] Step 5: `model.py`
 - [x] Step 6: `train.py`
-- [ ] Step 7: `sample.py`
+- [x] Step 7: `sample.py`
 - [ ] Step 8: first real run, honest samples pasted here
 
 Commands documented above describe the target pipeline. Anything not ticked
