@@ -58,7 +58,7 @@ is meant to be watched rather than run silently to completion.
 ### 1. Train the tokenizer
 
 ```bash
-python -m tokenizer.train_tokenizer \
+python -m tinygpt.tokenizer.train_tokenizer \
   --input data/raw/tinyshakespeare.txt \
   --vocab-size 4096 \
   --out vocab.json
@@ -99,7 +99,7 @@ Expect to see the merges scroll past, which is the interesting part:
 ### 2. Prepare token shards
 
 ```bash
-python -m data.prepare \
+python -m tinygpt.data.prepare \
   --input data/raw/tinyshakespeare.txt \
   --vocab vocab.json \
   --out-dir data/tokens
@@ -140,7 +140,7 @@ would otherwise be no symptom to notice.
 ### 3. Train
 
 ```bash
-python train.py --preset tiny --data data/tokens --out checkpoints/
+python -m tinygpt.train --preset tiny --data data/tokens --out checkpoints/
 ```
 
 AdamW, cosine learning-rate decay with linear warmup, gradient clipping.
@@ -179,7 +179,7 @@ remembered which preset it was.
 **Before any real run, run the overfit check first:**
 
 ```bash
-python train.py --preset tiny --data data/tokens --overfit-one-batch
+python -m tinygpt.train --preset tiny --data data/tokens --overfit-one-batch
 ```
 
 This trains on a single fixed batch for 500 steps, letting the model memorise it
@@ -213,7 +213,7 @@ only the collapse itself is the signal.
 ### 4. Sample
 
 ```bash
-python sample.py \
+python -m tinygpt.sample \
   --checkpoint checkpoints/tiny-step400.safetensors \
   --prompt "ROMEO:" \
   --max-tokens 120 \
@@ -296,7 +296,7 @@ Top-p on the same checkpoint, at the temperature the model was actually trained
 at:
 
 ```bash
-python sample.py --checkpoint checkpoints/tiny-step400.safetensors \
+python -m tinygpt.sample --checkpoint checkpoints/tiny-step400.safetensors \
   --prompt "QUEEN:" --temperature 1.0 --top-k 0 --top-p 0.9 --num-samples 2
 ```
 
@@ -311,7 +311,7 @@ What is thy action: here I came in love,
 And ill fruit that do so stands at all,
 ```
 
-Run `python sample.py` with no `--checkpoint` and it demonstrates the knobs on
+Run `python -m tinygpt.sample` with no `--checkpoint` and it demonstrates the knobs on
 two hand-written distributions instead, no model required. This is the fastest
 way to see the difference between top-k and top-p:
 
@@ -334,7 +334,7 @@ Everything below is from one 2000-step `tiny` run on TinyShakespeare, about
 eight minutes on an M-series Mac. The numbers are copied out of that run's log
 rather than reconstructed, including the part that does not flatter the model.
 (`logs/` is gitignored, so the file itself is not in the repo. Reproducing the
-run is the two commands in the Quick start followed by `python train.py
+run is the two commands in the Quick start followed by `python -m tinygpt.train
 --preset tiny --data data/tokens`; the figures below will be close but not
 identical, since the batch order is seeded per run.)
 
@@ -375,7 +375,7 @@ this curve is one of the more instructive things in the repo. If you want a
 checkpoint to actually sample from, stop early:
 
 ```bash
-python train.py --preset tiny --data data/tokens --out checkpoints/ --steps 400
+python -m tinygpt.train --preset tiny --data data/tokens --out checkpoints/ --steps 400
 ```
 
 The honest fixes for the underlying problem are more data, a smaller model, or
@@ -477,7 +477,7 @@ model moved from the first block to the second, not that it wrote a good play.
 ## Model presets
 
 Set with `--preset`. Defined in `config.py`, which prints the exact parameter
-breakdown when run directly (`python config.py`).
+breakdown when run directly (`python -m tinygpt.config`).
 
 | Preset | Layers | d_model | Heads | Context | Batch | Steps | Params | Use |
 |---|---|---|---|---|---|---|---|---|
@@ -504,14 +504,14 @@ Every module with meaningfully independent behavior is runnable alone, so you
 can understand one file without running the whole pipeline:
 
 ```bash
-python -m adapters.plain_text      # chunking, on an inline sample string
-python -m tokenizer.tokenizer      # trains a tiny vocab, shows a round trip
-python model.py                    # guided tour of RMSNorm/RoPE/SwiGLU/causality
-python config.py                   # parameter count breakdown per preset
-python sample.py                   # temperature/top-k/top-p demo, no model needed
+python -m tinygpt.adapters.plain_text      # chunking, on an inline sample string
+python -m tinygpt.tokenizer.tokenizer      # trains a tiny vocab, shows a round trip
+python -m tinygpt.model                    # guided tour of RMSNorm/RoPE/SwiGLU/causality
+python -m tinygpt.config                   # parameter count breakdown per preset
+python -m tinygpt.sample                   # temperature/top-k/top-p demo, no model needed
 ```
 
-`python model.py` is worth running before anything else. It does not just prove
+`python -m tinygpt.model` is worth running before anything else. It does not just prove
 the architecture is wired correctly, it demonstrates each of the four ideas that
 make this a modern transformer rather than a 2019 one, numerically:
 
@@ -567,20 +567,22 @@ text."
 
 ```
 tiny-gpt-trainer/
-├── adapters/
-│   ├── base.py              # Adapter interface: raw source -> iterator of text
-│   └── plain_text.py        # Reads .txt file(s), yields paragraph-ish chunks
-├── tokenizer/
-│   ├── train_tokenizer.py   # Trains a byte-level BPE vocab
-│   └── tokenizer.py         # Load / encode / decode
-├── data/
-│   ├── prepare.py           # adapter -> tokenizer -> uint16 token streams
-│   ├── raw/                 # downloaded corpora (gitignored)
-│   └── tokens/              # train.npy / val.npy (gitignored)
-├── model.py                 # RoPE attention + SwiGLU + RMSNorm, in MLX
-├── train.py                 # training loop, checkpoints, logging
-├── sample.py                # temperature / top-k / top-p generation
-├── config.py                # model + training size presets
+├── tinygpt/                     # the trainer: import it, or run any part with -m
+│   ├── adapters/
+│   │   ├── base.py              # Adapter interface: raw source -> iterator of text
+│   │   └── plain_text.py        # Reads .txt file(s), yields paragraph-ish chunks
+│   ├── tokenizer/
+│   │   ├── train_tokenizer.py   # Trains a byte-level BPE vocab
+│   │   └── tokenizer.py         # Load / encode / decode
+│   ├── data/
+│   │   └── prepare.py           # adapter -> tokenizer -> uint16 token streams
+│   ├── model.py                 # RoPE attention + SwiGLU + RMSNorm, in MLX
+│   ├── train.py                 # training loop, checkpoints, logging
+│   ├── sample.py                # temperature / top-k / top-p generation
+│   └── config.py                # model + training size presets
+├── data/                        # data only, no code
+│   ├── raw/                     # downloaded corpora (gitignored)
+│   └── tokens/                  # train.npy / val.npy (gitignored)
 ├── scripts/
 │   └── get_tinyshakespeare.py
 ├── tests/                   # fast plumbing tests, see DESIGN.md §6.1

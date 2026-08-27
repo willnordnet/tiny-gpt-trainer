@@ -8,7 +8,7 @@ means changing model size is one flag rather than an edit in four files.
 
 Run this file directly to see the parameter-count breakdown per preset:
 
-    python config.py
+    python -m tinygpt.config
 """
 
 import math

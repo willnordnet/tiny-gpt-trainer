@@ -18,7 +18,7 @@ explanation at its definition below:
 Run this file directly for a guided numerical tour of all four, plus a forward
 pass and a parameter count:
 
-    python model.py
+    python -m tinygpt.model
 """
 
 import math
@@ -26,7 +26,7 @@ import math
 import mlx.core as mx
 import mlx.nn as nn
 
-from config import PRESETS, ModelConfig, param_count
+from tinygpt.config import PRESETS, ModelConfig, param_count
 
 # Standard deviation for weight initialisation. 0.02 is the GPT-2 value and has
 # stuck around because it works: small enough that the initial forward pass does

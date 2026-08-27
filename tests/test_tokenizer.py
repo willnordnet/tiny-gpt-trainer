@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from tokenizer.tokenizer import BYTE_TOKENS, BPETokenizer, merge_pair
-from tokenizer.train_tokenizer import train_bpe
+from tinygpt.tokenizer.tokenizer import BYTE_TOKENS, BPETokenizer, merge_pair
+from tinygpt.tokenizer.train_tokenizer import train_bpe
 
 # Enough repetition that BPE has real pairs to learn, small enough to train
 # instantly. Deliberately English/ASCII so that the unicode round-trip cases

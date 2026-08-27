@@ -44,20 +44,22 @@ around guesswork instead of one shaped around a real, working example.
 
 ```
 tiny-gpt-trainer/
-├── adapters/
-│   ├── base.py              # Adapter interface: raw source -> iterator of text examples
-│   └── plain_text.py        # Reads .txt file(s), yields chunks of text
-├── tokenizer/
-│   ├── train_tokenizer.py   # Trains a small BPE vocab from adapter output
-│   └── tokenizer.py         # Load/encode/decode wrapper around the trained vocab
-├── data/
-│   ├── prepare.py           # adapter -> tokenizer -> uint16 token streams (.npy)
-│   ├── raw/                 # downloaded corpora (gitignored)
-│   └── tokens/              # train.npy / val.npy / meta.json (gitignored)
-├── model.py                 # RoPE attention + SwiGLU block + full model, in MLX
-├── train.py                 # training loop: loss, backward, optimizer, checkpoints
-├── sample.py                # generation: temperature / top-k / top-p sampling
-├── config.py                # model + training size presets (tiny / small)
+├── tinygpt/                     # the trainer: everything the model needs
+│   ├── adapters/
+│   │   ├── base.py              # Adapter interface: raw source -> iterator of text examples
+│   │   └── plain_text.py        # Reads .txt file(s), yields chunks of text
+│   ├── tokenizer/
+│   │   ├── train_tokenizer.py   # Trains a small BPE vocab from adapter output
+│   │   └── tokenizer.py         # Load/encode/decode wrapper around the trained vocab
+│   ├── data/
+│   │   └── prepare.py           # adapter -> tokenizer -> uint16 token streams (.npy)
+│   ├── model.py                 # RoPE attention + SwiGLU block + full model, in MLX
+│   ├── train.py                 # training loop: loss, backward, optimizer, checkpoints
+│   ├── sample.py                # generation: temperature / top-k / top-p sampling
+│   └── config.py                # model + training size presets (tiny / small)
+├── data/                        # data only, no code — see the note below
+│   ├── raw/                     # downloaded corpora (gitignored)
+│   └── tokens/                  # train.npy / val.npy / meta.json (gitignored)
 ├── scripts/
 │   └── get_tinyshakespeare.py   # fetches the corpus, since data/raw/ is gitignored
 ├── tests/                   # unit tests — see §6.1
@@ -71,9 +73,16 @@ tiny-gpt-trainer/
 └── logs/                    # training logs + periodic sample generations (gitignored)
 ```
 
+Note that `tinygpt/data/` and `data/` are different things, deliberately.
+`tinygpt/data/prepare.py` is *code* that produces token shards; the top-level
+`data/` holds only the corpora and the shards themselves. They shared a name
+until the trainer moved into a package, which meant `import data` and "the
+data directory" pointed at different places — a small thing, but exactly the
+kind of ambiguity this project would rather not make a reader resolve.
+
 The overfit-one-batch check of §6.2 exists twice on purpose: once as a fast,
 tiny-model assertion in `tests/` (so `pytest` catches a dead gradient path),
-and once as the real, watchable `python train.py --overfit-one-batch` gate on
+and once as the real, watchable `python -m tinygpt.train --overfit-one-batch` gate on
 the actual preset. The first is plumbing correctness, the second is the
 observed check described in §6.2.
 
@@ -125,7 +134,7 @@ Two size presets to start (`config.py`):
 | `small` | 27.80M | 8 | 512 | 8 | 512 | 16 | 5000 | The "real" run once `tiny` is verified |
 
 `config.py` computes those parameter counts from the shapes rather than
-hardcoding them, and `python config.py` prints the full breakdown per preset.
+hardcoding them, and `python -m tinygpt.config` prints the full breakdown per preset.
 Note where the parameters actually sit: at this scale the feed-forward blocks
 dominate (55% of `tiny`), not the embedding table (18%), which is a large part
 of why a 4096-token vocabulary is a reasonable choice here — see §3.2.
@@ -147,21 +156,21 @@ tweakable.
 
 ```
 .txt file(s)
-   │  adapters/plain_text.py: read()
+   │  tinygpt/adapters/plain_text.py: read()
    ▼
 raw text chunks
-   │  tokenizer/train_tokenizer.py (once) → vocab.json
-   │  tokenizer/tokenizer.py: encode()
+   │  tinygpt/tokenizer/train_tokenizer.py (once) → vocab.json
+   │  tinygpt/tokenizer/tokenizer.py: encode()
    ▼
 token ID sequences
-   │  data/prepare.py: concatenate into one flat uint16 stream per split
+   │  tinygpt/data/prepare.py: concatenate into one flat uint16 stream per split
    ▼
 data/tokens/{train,val}.npy + meta.json
-   │  train.py: load the stream, slice random training windows out of
-   │            it at batch time, train model.py, checkpoint + log
+   │  tinygpt/train.py: load the stream, slice random training windows out of
+   │                    it at batch time, train the model, checkpoint + log
    ▼
 checkpoints/ + logs/
-   │  sample.py: load checkpoint, generate
+   │  tinygpt/sample.py: load checkpoint, generate
    ▼
 generated text
 ```

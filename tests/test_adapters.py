@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from adapters.base import Adapter
-from adapters.plain_text import PlainTextAdapter
+from tinygpt.adapters.base import Adapter
+from tinygpt.adapters.plain_text import PlainTextAdapter
 
 
 def write(tmp_path: Path, name: str, text: str) -> Path:

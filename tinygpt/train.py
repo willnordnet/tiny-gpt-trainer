@@ -16,14 +16,14 @@ The four things this file has to get right:
 
 Before any real run, use the gate:
 
-    python train.py --preset tiny --data data/tokens --overfit-one-batch
+    python -m tinygpt.train --preset tiny --data data/tokens --overfit-one-batch
 
 which is DESIGN.md section 6.2. If a tiny fixed batch cannot be memorised, the
 architecture or the gradient path is broken and a real run is a waste of time.
 
 Then the real thing:
 
-    python train.py --preset tiny --data data/tokens --out checkpoints/
+    python -m tinygpt.train --preset tiny --data data/tokens --out checkpoints/
 """
 
 import argparse
@@ -39,11 +39,11 @@ import mlx.optimizers as optim
 import numpy as np
 from mlx.utils import tree_flatten, tree_unflatten
 
-from config import PRESETS, ModelConfig, TrainConfig, describe
-from data.prepare import load_tokens, verify_tokenizer_matches
-from model import TinyGPT
-from sample import generate_text
-from tokenizer.tokenizer import BPETokenizer
+from tinygpt.config import PRESETS, ModelConfig, TrainConfig, describe
+from tinygpt.data.prepare import load_tokens, verify_tokenizer_matches
+from tinygpt.model import TinyGPT
+from tinygpt.sample import generate_text
+from tinygpt.tokenizer.tokenizer import BPETokenizer
 
 # Checkpoints are written as safetensors rather than .npz because safetensors
 # files carry a string metadata dict alongside the arrays. That lets a

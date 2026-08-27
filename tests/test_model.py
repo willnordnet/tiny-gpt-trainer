@@ -17,8 +17,8 @@ import mlx.optimizers as optim
 import pytest
 from mlx.utils import tree_flatten
 
-from config import ModelConfig, param_count
-from model import (
+from tinygpt.config import ModelConfig, param_count
+from tinygpt.model import (
     RMSNorm,
     SwiGLU,
     CausalSelfAttention,

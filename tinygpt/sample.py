@@ -16,13 +16,13 @@ The core loop is four lines and never changes:
 
 Run it against a checkpoint:
 
-    python sample.py --checkpoint checkpoints/tiny-step2000.safetensors \
+    python -m tinygpt.sample --checkpoint checkpoints/tiny-step2000.safetensors \
         --prompt "ROMEO:" --max-tokens 200 --temperature 0.8 --top-k 40
 
 Or run this file with no arguments to see what each knob does to a small
 hand-made distribution, with no model and no checkpoint involved:
 
-    python sample.py
+    python -m tinygpt.sample
 """
 
 import argparse
@@ -32,8 +32,8 @@ from typing import Callable
 
 import mlx.core as mx
 
-from model import TinyGPT
-from tokenizer.tokenizer import BPETokenizer
+from tinygpt.model import TinyGPT
+from tinygpt.tokenizer.tokenizer import BPETokenizer
 
 # Masked-out tokens are set to negative infinity rather than to a large negative
 # number. exp(-inf) is exactly 0, so a rejected token receives exactly zero
@@ -512,7 +512,7 @@ def main() -> None:
     # checkpoint off disk. Keeping the import local says that out loud, and it
     # also breaks what would otherwise be an import cycle, since train.py calls
     # generate_text() for its mid-run previews.
-    from train import load_checkpoint
+    from tinygpt.train import load_checkpoint
 
     checkpoint = Path(args.checkpoint)
     model, metadata = load_checkpoint(checkpoint)

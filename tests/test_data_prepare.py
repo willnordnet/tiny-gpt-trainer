@@ -13,15 +13,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from data.prepare import (
+from tinygpt.data.prepare import (
     CHUNK_SEPARATOR,
     TOKEN_DTYPE,
     load_tokens,
     prepare,
     verify_tokenizer_matches,
 )
-from tokenizer.tokenizer import BPETokenizer
-from tokenizer.train_tokenizer import train_bpe
+from tinygpt.tokenizer.tokenizer import BPETokenizer
+from tinygpt.tokenizer.train_tokenizer import train_bpe
 
 # Long enough to survive a 10% split with room for several windows, repetitive
 # enough that BPE learns real merges.

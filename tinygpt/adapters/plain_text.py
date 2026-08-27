@@ -6,7 +6,7 @@ against one real, working case rather than several imagined ones.
 
 Run directly to see the chunking behaviour on a small inline sample:
 
-    python -m adapters.plain_text
+    python -m tinygpt.adapters.plain_text
 """
 
 import re

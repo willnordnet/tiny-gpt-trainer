@@ -11,7 +11,7 @@ all but 1/context_len of the available windows.
 
 Usage:
 
-    python -m data.prepare \
+    python -m tinygpt.data.prepare \
         --input data/raw/tinyshakespeare.txt \
         --vocab vocab.json \
         --out-dir data/tokens
@@ -23,8 +23,8 @@ from pathlib import Path
 
 import numpy as np
 
-from adapters.plain_text import PlainTextAdapter
-from tokenizer.tokenizer import BPETokenizer
+from tinygpt.adapters.plain_text import PlainTextAdapter
+from tinygpt.tokenizer.tokenizer import BPETokenizer
 
 # Chunks are rejoined with a blank line before encoding. This is what stands in
 # for a special end-of-document token in this project: the boundary between two

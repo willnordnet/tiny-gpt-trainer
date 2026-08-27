@@ -21,7 +21,7 @@ The algorithm, in full:
 
 Usage:
 
-    python -m tokenizer.train_tokenizer \
+    python -m tinygpt.tokenizer.train_tokenizer \
         --input data/raw/tinyshakespeare.txt \
         --vocab-size 4096 \
         --out vocab.json
@@ -32,8 +32,8 @@ import collections
 import time
 from pathlib import Path
 
-from adapters.plain_text import PlainTextAdapter
-from tokenizer.tokenizer import (
+from tinygpt.adapters.plain_text import PlainTextAdapter
+from tinygpt.tokenizer.tokenizer import (
     BYTE_TOKENS,
     PRETOKENIZE,
     BPETokenizer,

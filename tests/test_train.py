@@ -16,9 +16,9 @@ import numpy as np
 import pytest
 from mlx.utils import tree_flatten
 
-from config import ModelConfig, TrainConfig
-from model import TinyGPT
-from train import (
+from tinygpt.config import ModelConfig, TrainConfig
+from tinygpt.model import TinyGPT
+from tinygpt.train import (
     RunLogger,
     build_optimizer,
     evaluate,

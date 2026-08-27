@@ -13,7 +13,7 @@ characters take several tokens each, which is a good trade at this scale.
 
 Run directly to train a tiny vocab on an inline string and see round trips:
 
-    python -m tokenizer.tokenizer
+    python -m tinygpt.tokenizer.tokenizer
 """
 
 import hashlib
@@ -232,7 +232,7 @@ def merge_pair(ids: list[int], pair: tuple[int, int], new_id: int) -> list[int]:
 if __name__ == "__main__":
     # Imported here rather than at module scope to avoid a circular import:
     # train_tokenizer imports BPETokenizer from this file.
-    from tokenizer.train_tokenizer import train_bpe
+    from tinygpt.tokenizer.train_tokenizer import train_bpe
 
     SAMPLE = (
         "the cat sat on the mat. the cat sat on the hat. "

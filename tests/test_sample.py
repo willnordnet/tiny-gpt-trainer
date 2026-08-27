@@ -14,9 +14,9 @@ each claim in sample.py's comments is checked as arithmetic.
 import mlx.core as mx
 import pytest
 
-from config import ModelConfig
-from model import TinyGPT
-from sample import (
+from tinygpt.config import ModelConfig
+from tinygpt.model import TinyGPT
+from tinygpt.sample import (
     apply_temperature,
     apply_top_k,
     apply_top_p,
@@ -24,7 +24,7 @@ from sample import (
     generate_text,
     reshape_logits,
 )
-from tokenizer.tokenizer import BPETokenizer
+from tinygpt.tokenizer.tokenizer import BPETokenizer
 
 
 @pytest.fixture
