@@ -92,6 +92,13 @@ dashboard should never be the only way to see what happened.
 
 ## Things worth knowing
 
+- **Uploads get their own vocabulary size.** A preset fixes `vocab_size` at
+  4096, but a BPE vocab trained on your upload is whatever that corpus could
+  support. After the prepare stage the runner reads the real number out of
+  `data/tokens/meta.json` and passes it as `--vocab-size`, so any corpus
+  trains. Note that training a new vocab **overwrites `vocab.json` in place**,
+  which orphans every checkpoint from before that run; the panels refuse to
+  decode one rather than silently mislabelling its tokens.
 - **GPU contention.** The server and the training subprocess both use Metal.
   Prompting a checkpoint mid-run works and slows training while it does.
 - **Checkpoints, not live weights.** The panels read `.safetensors` files, so

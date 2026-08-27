@@ -10,13 +10,14 @@ The one exception is the last test, a miniature version of the
 
 import json
 import math
+from dataclasses import asdict
 
 import mlx.core as mx
 import numpy as np
 import pytest
 from mlx.utils import tree_flatten
 
-from tinygpt.config import ModelConfig, TrainConfig
+from tinygpt.config import PRESETS, ModelConfig, TrainConfig
 from tinygpt.model import TinyGPT
 from tinygpt.train import (
     RunLogger,
@@ -332,3 +333,23 @@ def test_loss_collapses_when_overfitting_a_single_batch(cfg, stream):
 
     assert first == pytest.approx(math.log(cfg.vocab_size), rel=0.15)
     assert last < 0.1 * first, f"loss stalled at {last:.4f}, started at {first:.4f}"
+
+
+def test_vocab_size_override_resizes_the_embedding_table():
+    """A preset hardcodes vocab_size for this repo's TinyShakespeare vocab.
+    Any other corpus learns a different number of merges -- a small one
+    exhausts its pairs early -- and the embedding table has to match the
+    tokenizer that actually built the shards, or ids index the wrong rows.
+    """
+    base = PRESETS["tiny"].model
+    resized = ModelConfig(**{**asdict(base), "vocab_size": 372})
+
+    assert resized.vocab_size == 372
+    # Nothing else may move: only the embedding is vocabulary-shaped.
+    assert resized.n_layers == base.n_layers
+    assert resized.d_model == base.d_model
+    assert resized.context_len == base.context_len
+
+    model = TinyGPT(resized)
+    logits = model(mx.array([[0, 1, 2]]))
+    assert logits.shape == (1, 3, 372)

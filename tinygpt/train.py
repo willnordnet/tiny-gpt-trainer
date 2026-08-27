@@ -592,6 +592,13 @@ def main() -> None:
         help="override max_steps (or the overfit step count, default 500)",
     )
     parser.add_argument(
+        "--vocab-size",
+        type=int,
+        default=None,
+        help="override the preset's vocab_size, to match a corpus whose "
+             "tokenizer learned a different number of merges",
+    )
+    parser.add_argument(
         "--prompt",
         default="ROMEO:",
         help="prompt used for the periodic sample previews",
@@ -623,6 +630,18 @@ def main() -> None:
         model_cfg = preset.model
         train_cfg = preset.train
 
+        if args.vocab_size is not None:
+            # A preset fixes vocab_size at 4096 because that is what the
+            # TinyShakespeare vocab in this repo has. Any other corpus will
+            # learn a different number of merges -- a small one may exhaust
+            # its pairs long before the target -- and the embedding table has
+            # to be the size of whatever tokenizer actually produced the
+            # shards. Rebuilding the frozen dataclass is the same move the
+            # --steps override below makes for max_steps.
+            model_cfg = ModelConfig(
+                **{**asdict(model_cfg), "vocab_size": args.vocab_size}
+            )
+
         train_tokens, val_tokens, meta = load_tokens(args.data)
 
         # The shards were built by some tokenizer; the model's vocab_size has to
@@ -630,7 +649,9 @@ def main() -> None:
         if meta["vocab_size"] != model_cfg.vocab_size:
             raise ValueError(
                 f"shards were built with vocab_size={meta['vocab_size']} but "
-                f"preset '{args.preset}' expects {model_cfg.vocab_size}"
+                f"preset '{args.preset}' expects {model_cfg.vocab_size}. "
+                f"Pass --vocab-size {meta['vocab_size']} to size the embedding "
+                f"table to the tokenizer that actually built these shards."
             )
 
         tokenizer = None

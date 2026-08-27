@@ -191,3 +191,62 @@ def test_subscribing_while_events_are_being_emitted_loses_nothing():
     # Contiguous from zero, in order, no repeats.
     assert seen == list(range(len(seen)))
     assert len(seen) == total
+
+
+# --- late-bound vocab size -------------------------------------------------
+
+
+def test_the_train_stage_takes_its_vocab_size_from_the_prepared_shards(tmp_path):
+    """A preset fixes vocab_size at 4096, but a freshly-trained BPE vocab is
+    whatever the corpus supported. The real number only exists once prepare
+    has written meta.json, so it is resolved when the stage starts."""
+    from web.runner import resolve_vocab_size
+
+    (tmp_path / "data" / "tokens").mkdir(parents=True)
+    (tmp_path / "data" / "tokens" / "meta.json").write_text('{"vocab_size": 372}')
+
+    *_, train = build_stages(source="data/raw/x.txt", preset="tiny", steps=None,
+                             prompt="p", overfit_gate=False, new_tokenizer=True)
+    argv = resolve_vocab_size(train, tmp_path)
+    assert argv[argv.index("--vocab-size") + 1] == "372"
+
+
+def test_only_the_train_stage_is_rewritten(tmp_path):
+    """Note the tokenizer stage carries its own --vocab-size: that is
+    train_tokenizer.py's target merge count, a different flag on a different
+    command. The check is that resolve_vocab_size leaves every non-train
+    stage's argv exactly as built."""
+    from web.runner import resolve_vocab_size
+
+    (tmp_path / "data" / "tokens").mkdir(parents=True)
+    (tmp_path / "data" / "tokens" / "meta.json").write_text('{"vocab_size": 372}')
+
+    stages = build_stages(source="data/raw/x.txt", preset="tiny", steps=None,
+                          prompt="p", overfit_gate=True, new_tokenizer=True)
+    for stage in stages[:-1]:
+        assert resolve_vocab_size(stage, tmp_path) == stage.argv
+
+
+def test_a_missing_meta_json_leaves_argv_alone(tmp_path):
+    """train.py has its own vocab check with a better message than anything
+    this could invent, so an unreadable meta.json defers to it."""
+    from web.runner import resolve_vocab_size
+
+    *_, train = build_stages(source="data/raw/x.txt", preset="tiny", steps=None,
+                             prompt="p", overfit_gate=False, new_tokenizer=True)
+    assert "--vocab-size" not in resolve_vocab_size(train, tmp_path)
+
+
+def test_resolving_twice_does_not_duplicate_the_flag(tmp_path):
+    """stage.argv is reassigned in place when a stage starts; a retry or a
+    resumed job must not append a second --vocab-size."""
+    from web.runner import resolve_vocab_size
+
+    (tmp_path / "data" / "tokens").mkdir(parents=True)
+    (tmp_path / "data" / "tokens" / "meta.json").write_text('{"vocab_size": 372}')
+
+    *_, train = build_stages(source="data/raw/x.txt", preset="tiny", steps=None,
+                             prompt="p", overfit_gate=False, new_tokenizer=True)
+    train.argv = resolve_vocab_size(train, tmp_path)
+    train.argv = resolve_vocab_size(train, tmp_path)
+    assert train.argv.count("--vocab-size") == 1

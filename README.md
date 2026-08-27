@@ -407,6 +407,25 @@ python -m tinygpt.train --preset tiny --data data/tokens --out checkpoints/ --st
 The honest fixes for the underlying problem are more data, a smaller model, or
 regularisation. Not a different learning rate.
 
+### Training on your own text
+
+The presets fix `vocab_size` at 4096 because that is what this repo's
+TinyShakespeare vocabulary has. Another corpus will learn a different number of
+merges -- a small file can exhaust its available pairs long before the target --
+and the embedding table has to match whatever tokenizer actually built the
+shards. `--vocab-size` overrides the preset for exactly that case:
+
+```bash
+python -m tinygpt.tokenizer.train_tokenizer --input my.txt --vocab-size 4096 --out vocab.json
+python -m tinygpt.data.prepare --input my.txt --vocab vocab.json --out-dir data/tokens
+# meta.json now records the vocabulary the corpus could actually support
+python -m tinygpt.train --preset tiny --data data/tokens --out checkpoints/ --vocab-size 372
+```
+
+The number to pass is `vocab_size` in `data/tokens/meta.json`; getting it wrong
+is caught before training starts, with the right value in the error message.
+The browser viewer reads it from there and passes it for you.
+
 ### Why the samples do not tell you any of this
 
 This is the part worth sitting with. Both of these are real output from the run

@@ -23,6 +23,7 @@ stops the pipeline before the real run starts, which is the whole point of
 having a gate (DESIGN.md section 6.2).
 """
 
+import json
 import queue
 import shlex
 import subprocess
@@ -47,6 +48,10 @@ class Stage:
     def __init__(self, name: str, argv: list[str]) -> None:
         self.name = name
         self.argv = argv
+        # Set on the train stage: its --vocab-size cannot be decided until an
+        # earlier stage has written the token shards. See resolve_vocab_size.
+        self.needs_vocab_size = False
+        self.tokens_dir = ""
 
     def __repr__(self) -> str:
         return f"Stage({self.name!r}, {shlex.join(self.argv)!r})"
@@ -111,9 +116,40 @@ def build_stages(
     train_argv = train_base + ["--out", out_dir]
     if steps is not None:
         train_argv += ["--steps", str(steps)]
-    stages.append(Stage("train", train_argv))
+
+    train_stage = Stage("train", train_argv)
+    # A preset fixes vocab_size at 4096, but a freshly-trained BPE vocab is
+    # whatever the corpus supported -- a small file exhausts its pairs early.
+    # The real number is not known until prepare has written meta.json, so the
+    # train stage is marked to look it up just before it runs.
+    train_stage.needs_vocab_size = True
+    train_stage.tokens_dir = tokens_dir
+    stages.append(train_stage)
 
     return stages
+
+
+def resolve_vocab_size(stage: Stage, cwd: Path = REPO_ROOT) -> list[str]:
+    """Append --vocab-size to the train stage, read from the prepared shards.
+
+    prepare.py writes the tokenizer's real vocab_size into meta.json, and the
+    embedding table has to be that size or the ids index the wrong rows.
+    Reading it here rather than guessing means an uploaded corpus trains at
+    whatever vocabulary its own text could support.
+
+    Returns argv unchanged when there is no meta.json to read: train.py has
+    its own check and a better error message than anything invented here.
+    """
+    if not stage.needs_vocab_size or "--vocab-size" in stage.argv:
+        return stage.argv
+
+    meta_path = cwd / stage.tokens_dir / "meta.json"
+    try:
+        vocab_size = json.loads(meta_path.read_text())["vocab_size"]
+    except (OSError, ValueError, KeyError):
+        return stage.argv
+
+    return stage.argv + ["--vocab-size", str(int(vocab_size))]
 
 
 class Job:
@@ -210,6 +246,9 @@ class Job:
                 if self._stop_requested:
                     self._emit({"type": "stage_skipped", "stage": stage.name})
                     continue
+
+                # Late-bind anything an earlier stage had to produce first.
+                stage.argv = resolve_vocab_size(stage, self.cwd)
 
                 self._emit({
                     "type": "stage_start",
