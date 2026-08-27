@@ -238,7 +238,12 @@ class CausalSelfAttention(nn.Module):
         self.o_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=False)
 
     def __call__(
-        self, x: mx.array, cos: mx.array, sin: mx.array, mask: mx.array
+        self,
+        x: mx.array,
+        cos: mx.array,
+        sin: mx.array,
+        mask: mx.array,
+        attention_out: list[mx.array] | None = None,
     ) -> mx.array:
         batch, seq_len, d_model = x.shape
 
@@ -278,6 +283,21 @@ class CausalSelfAttention(nn.Module):
         # or before i. mx.softmax subtracts the row max internally for numerical
         # stability, so no exp() overflow even with large scores.
         weights = mx.softmax(scores, axis=-1)
+
+        # Attention weights are normally a means to an end: they exist for the
+        # one matmul below and are then thrown away. A caller that wants to
+        # *look* at them - the heatmap in web/ - passes a list to collect them
+        # into. Left at None, which is what training and sampling do, this
+        # branch does nothing at all, so there is still exactly one attention
+        # implementation in this repo. The alternative was to recompute q/k,
+        # RoPE and the softmax in a separate viewer module, which is the same
+        # two-code-paths-that-must-stay-identical cost that generate() in
+        # sample.py declines to pay for a KV cache.
+        #
+        # This is free: `weights` is already materialised, because `attended`
+        # on the next line depends on it. Appending only keeps a reference.
+        if attention_out is not None:
+            attention_out.append(weights)
 
         # Weighted sum of values:
         #   (B, H, T, T) @ (B, H, T, head_dim) -> (B, H, T, head_dim)
@@ -373,9 +393,16 @@ class Block(nn.Module):
         self.feed_forward = SwiGLU(cfg)
 
     def __call__(
-        self, x: mx.array, cos: mx.array, sin: mx.array, mask: mx.array
+        self,
+        x: mx.array,
+        cos: mx.array,
+        sin: mx.array,
+        mask: mx.array,
+        attention_out: list[mx.array] | None = None,
     ) -> mx.array:
-        x = x + self.attention(self.attention_norm(x), cos, sin, mask)
+        x = x + self.attention(
+            self.attention_norm(x), cos, sin, mask, attention_out
+        )
         x = x + self.feed_forward(self.ffn_norm(x))
         return x
 
@@ -449,8 +476,16 @@ class TinyGPT(nn.Module):
         # (e.g. "blocks.3.attention.o_proj") so the check above can match.
         self.apply_to_modules(init_module)
 
-    def __call__(self, ids: mx.array) -> mx.array:
-        """Forward pass. ids is (B, T) of token ids; returns (B, T, vocab)."""
+    def __call__(
+        self, ids: mx.array, attention_out: list[mx.array] | None = None
+    ) -> mx.array:
+        """Forward pass. ids is (B, T) of token ids; returns (B, T, vocab).
+
+        Pass a list as `attention_out` to also collect the attention weights:
+        it comes back holding one (B, n_heads, T, T) array per layer, in layer
+        order, which is what the heatmap in web/ renders. Omitting it - the
+        normal case, and what train.py and sample.py do - costs nothing.
+        """
         _, seq_len = ids.shape
 
         # Position tables and mask are built for exactly this sequence length.
@@ -466,7 +501,7 @@ class TinyGPT(nn.Module):
         h = self.embed(ids)
 
         for block in self.blocks:
-            h = block(h, cos, sin, mask)
+            h = block(h, cos, sin, mask, attention_out)
 
         h = self.final_norm(h)
 

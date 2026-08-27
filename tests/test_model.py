@@ -122,6 +122,71 @@ def test_editing_a_token_leaves_earlier_positions_untouched(cfg, model):
     assert not mx.array_equal(before[:, edit_at:], after[:, edit_at:])
 
 
+
+# --- observing the attention weights --------------------------------------
+#
+# TinyGPT.__call__ takes an optional list and fills it with the per-layer
+# attention weights, which is what the heatmap in web/ draws. These tests pin
+# down both halves of that contract: that asking for the weights gives back
+# something that really is a set of attention distributions, and that not
+# asking for them leaves the forward pass exactly as it was.
+
+
+def test_collected_attention_has_one_entry_per_layer(cfg, model):
+    seq_len = 8
+    ids = random_ids(cfg, 2, seq_len)
+
+    collected: list[mx.array] = []
+    model(ids, attention_out=collected)
+
+    assert len(collected) == cfg.n_layers
+    for weights in collected:
+        assert weights.shape == (2, cfg.n_heads, seq_len, seq_len)
+
+
+def test_collected_attention_rows_are_probability_distributions(cfg, model):
+    """Each row is a softmax, so it must sum to 1 and never be negative."""
+    ids = random_ids(cfg, 1, 8)
+
+    collected: list[mx.array] = []
+    model(ids, attention_out=collected)
+
+    for weights in collected:
+        assert float(mx.min(weights)) >= 0.0
+        row_sums = mx.sum(weights, axis=-1)
+        assert mx.allclose(row_sums, mx.ones_like(row_sums), atol=1e-5)
+
+
+def test_collected_attention_is_zero_above_the_diagonal(cfg, model):
+    """The causal mask, now observable directly rather than inferred.
+
+    test_editing_a_token_leaves_earlier_positions_untouched proves causality
+    from the outside, by perturbing an input and watching what moves. This
+    proves the same thing from the inside: position i simply has no weight on
+    any position j > i. Worth having both - if the mask were ever dropped,
+    this test names the cause where the other only reports a symptom.
+    """
+    seq_len = 8
+    ids = random_ids(cfg, 1, seq_len)
+
+    collected: list[mx.array] = []
+    model(ids, attention_out=collected)
+
+    upper_triangle = mx.triu(mx.ones((seq_len, seq_len)), k=1)
+    for weights in collected:
+        assert float(mx.max(weights * upper_triangle)) == 0.0
+
+
+def test_not_collecting_attention_leaves_the_logits_unchanged(cfg, model):
+    """The default path must be untouched by the existence of the collector."""
+    ids = random_ids(cfg, 1, 8)
+
+    without = model(ids)
+    with_collection = model(ids, attention_out=[])
+
+    assert mx.array_equal(without, with_collection)
+
+
 # --- RoPE -----------------------------------------------------------------
 
 
