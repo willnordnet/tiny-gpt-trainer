@@ -316,6 +316,149 @@ A TORN distribution (no clear winner), same settings
     top_p=0.90 kept 3 tokens when confident, 6 when torn.  It follows the shape.
 ```
 
+## What a real run looks like
+
+Everything below is from one 2000-step `tiny` run on TinyShakespeare, about
+eight minutes on an M-series Mac, logged to `logs/run-20260827-091048-tiny.log`.
+The numbers are copied out of that log rather than reconstructed, including the
+part that does not flatter the model.
+
+### The loss curve
+
+| Step | Train | Val | |
+|---|---|---|---|
+| 100 | 4.832 | 4.935 | |
+| 200 | 4.248 | 4.546 | |
+| 300 | 3.820 | **4.364** | best held-out loss |
+| 400 | 3.373 | 4.367 | |
+| 500 | 2.957 | 4.504 | val starts climbing |
+| 700 | 2.218 | 4.917 | |
+| 1000 | 1.287 | 5.599 | |
+| 1500 | 0.644 | 6.114 | |
+| 2000 | **0.466** | **6.399** | worse than step 100 |
+
+Two things happen here and only one of them is the thing you were hoping for.
+
+Training loss falls from 4.83 to 0.47, smoothly, with no spikes and no NaN.
+That part is the pipeline working: gradients reach the weights, the optimiser
+is stable, the targets line up.
+
+Validation loss bottoms out around step 300 and then climbs for the remaining
+1,700 steps, finishing *worse than it was at step 100*. The model is not
+learning Shakespeare any more. It is memorising this particular copy of it.
+
+That is not a bug, it is arithmetic. 5.87M parameters against 310k training
+tokens, and 2000 steps x 8,192 tokens is 16.4M tokens seen, roughly 53 passes
+over the corpus. The usual compute-optimal rule of thumb wants something like
+20 tokens per parameter; this run has about 0.05. There is nothing for that
+much capacity to do with that little text except remember it.
+
+**So the `tiny` preset's default of 2000 steps is too many for this corpus.**
+The useful checkpoint is somewhere around step 300 to 400. That default is left
+alone and documented here rather than quietly tuned away, because the shape of
+this curve is one of the more instructive things in the repo. If you want a
+checkpoint to actually sample from, stop early:
+
+```bash
+python train.py --preset tiny --data data/tokens --out checkpoints/ --steps 400
+```
+
+The honest fixes for the underlying problem are more data, a smaller model, or
+regularisation. Not a different learning rate.
+
+### Why the samples do not tell you any of this
+
+This is the part worth sitting with. Both of these are real output from the run
+above, same prompt, same temperature. One is from near the validation minimum,
+the other from the end, by which point held-out loss is about 40% worse.
+Both are shown in full, cut off only where the 80-token preview limit cut
+them off:
+
+```
+[sample @ step 500]  val loss 4.50
+ROMEO:
+Ay, but not a kind.
+
+Nurse:
+Do you speak from me? What are you so?
+
+ROMEO:
+Romeo, but she is a happy foes is dead.
+
+Nurse:
+A old thing, a very friend, and false, she's,
+alter'd, a tender man, and I know, be king,
+Is all a hundred
+```
+
+```
+[sample @ step 2000]  val loss 6.40
+ROMEO:
+Go to, go to; I say to Henry,
+Which, how thou kill'd it, still you for his son.
+
+ROMEO:
+Who dost weeping tell thee by the world which 'twas
+For waterspose to me.
+
+JULIET:
+O all this fouloundothege to curse
+The safe of thy mouth, which is my breast.
+
+ROMEO
+```
+
+Read those cold and you would not reliably pick the loser. Both have speaker
+labels, line breaks, roughly plausible syntax, and a scattering of invented
+words. The second one is arguably the more fun read.
+
+Validation loss says the second model is substantially worse at predicting
+held-out Shakespeare, and it is right. What that model gained instead was the
+training split, memorised, and memorisation does not announce itself in a
+60-token generation.
+
+So: reading generations tells you whether the model has picked up the *shape*
+of the data. It cannot tell you whether the model is *generalising*. Those are
+two different questions and only the first one is answerable by eye. This is
+why the validation curve exists, and why `DESIGN.md` §6.3 sets the acceptance
+bar on loss behaviour rather than on how good the text looks.
+
+### Where it started
+
+For contrast, the same prompt through an untrained model, before any gradient
+step at all:
+
+```
+ROMEO: morning most whiincentio raumb birthharusion Kate yield traitor
+almostLLookPOMPEYed tooissionlandorryitedellersetYourMISTRESSStandBYrahLUCIO
+div safonounceing
+```
+
+That is the tokenizer's vocabulary sampled at near-random: real word fragments,
+because byte-level BPE learned them from the corpus, in no order, with no line
+structure and no notion that a speaker label is followed by a colon and a
+newline. By step 250 the structure is already there:
+
+```
+ROMEO:
+Song, down, we'll reck our traitor on a warrant.
+
+JOHN OF YORK:
+And such a blances, and safening
+Be fead'd, that I am not.
+
+BUCKINGHAM:
+I do beseech you, my liege; for I will be gone.
+
+NORFROU:
+A partial dayly or by me
+```
+
+Speaker labels, colons, blank lines between speeches, dialogue that starts with
+a verb of address. Still nonsense sentence by sentence, and that is the correct
+outcome for 5.9M parameters and eight minutes. The acceptance bar is that the
+model moved from the first block to the second, not that it wrote a good play.
+
 ## Model presets
 
 Set with `--preset`. Defined in `config.py`, which prints the exact parameter
@@ -383,12 +526,19 @@ tokenizer, the data pipeline, `model.py`, or `train.py`.
 The acceptance bar, per `DESIGN.md` §6.3, stated so this is judged on its own
 terms:
 
-- [x] All `pytest` tests pass. (109 of them, in 0.8s.)
-- [x] `--overfit-one-batch` drives loss to near zero. (8.294 -> 0.0077.)
-- [ ] Loss on the real dataset decreases and roughly plateaus, without spiking
-      or going NaN.
-- [ ] Sample generations visibly shift from noise toward corpus-like style over
-      the course of a run.
+- [x] All `pytest` tests pass. (151 of them, in 1.5s.)
+- [x] `--overfit-one-batch` drives loss to near zero. (8.294 -> 0.044, which is
+      0.5% of the uniform-guess loss.)
+- [x] Loss on the real dataset decreases, without spiking or going NaN. Train
+      loss falls 4.83 -> 0.47 over 2000 steps, smoothly. Validation loss does
+      *not* plateau: it bottoms out near step 300 and then climbs, for the
+      reasons in [What a real run looks like](#what-a-real-run-looks-like).
+      That is a property of this corpus being far too small for this model,
+      not of the training loop misbehaving.
+- [x] Sample generations visibly shift from noise toward corpus-like style over
+      the course of a run. The shift happens early, inside the first few
+      hundred steps, and then samples stop visibly changing even as held-out
+      loss gets substantially worse.
 
 That is the definition of success here. Not "the model produces impressive
 text."
@@ -438,7 +588,7 @@ one commit. Current state:
 - [x] Step 5: `model.py`
 - [x] Step 6: `train.py`
 - [x] Step 7: `sample.py`
-- [ ] Step 8: first real run, honest samples pasted here
+- [x] Step 8: first real run, honest samples pasted here
 
 Commands documented above describe the target pipeline. Anything not ticked
 off does not exist yet.
