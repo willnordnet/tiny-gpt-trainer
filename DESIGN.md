@@ -45,24 +45,37 @@ around guesswork instead of one shaped around a real, working example.
 ```
 tiny-gpt-trainer/
 ├── adapters/
-│   ├── base.py          # Adapter interface: raw source -> iterator of text examples
-│   └── plain_text.py     # Reads .txt file(s), yields chunks of text
+│   ├── base.py              # Adapter interface: raw source -> iterator of text examples
+│   └── plain_text.py        # Reads .txt file(s), yields chunks of text
 ├── tokenizer/
 │   ├── train_tokenizer.py   # Trains a small BPE vocab from adapter output
-│   └── tokenizer.py          # Load/encode/decode wrapper around the trained vocab
+│   └── tokenizer.py         # Load/encode/decode wrapper around the trained vocab
 ├── data/
-│   └── prepare.py            # adapter -> tokenizer -> packed token shards (.npy)
-├── model.py                   # RoPE attention + SwiGLU block + full model, in MLX
-├── train.py                    # training loop: loss, backward, optimizer, checkpoints
-├── sample.py                    # generation: temperature / top-k / top-p sampling
-├── config.py                     # model + training size presets (tiny / small)
-├── tests/                          # unit tests — see §6.1
+│   ├── prepare.py           # adapter -> tokenizer -> uint16 token streams (.npy)
+│   ├── raw/                 # downloaded corpora (gitignored)
+│   └── tokens/              # train.npy / val.npy / meta.json (gitignored)
+├── model.py                 # RoPE attention + SwiGLU block + full model, in MLX
+├── train.py                 # training loop: loss, backward, optimizer, checkpoints
+├── sample.py                # generation: temperature / top-k / top-p sampling
+├── config.py                # model + training size presets (tiny / small)
+├── scripts/
+│   └── get_tinyshakespeare.py   # fetches the corpus, since data/raw/ is gitignored
+├── tests/                   # unit tests — see §6.1
 │   ├── test_adapters.py
 │   ├── test_tokenizer.py
 │   ├── test_data_prepare.py
-│   └── test_model.py               # includes overfit-one-batch check, §6.2
-└── logs/                             # training logs + periodic sample generations
+│   ├── test_model.py        # includes an overfit-one-batch check, §6.2
+│   ├── test_train.py        # batching, LR schedule, optimizer split, checkpoints
+│   └── test_sample.py       # the sampling knobs and the generation loop
+├── checkpoints/             # .safetensors, config + step travel inside (gitignored)
+└── logs/                    # training logs + periodic sample generations (gitignored)
 ```
+
+The overfit-one-batch check of §6.2 exists twice on purpose: once as a fast,
+tiny-model assertion in `tests/` (so `pytest` catches a dead gradient path),
+and once as the real, watchable `python train.py --overfit-one-batch` gate on
+the actual preset. The first is plumbing correctness, the second is the
+observed check described in §6.2.
 
 ### 3.1 The adapter interface (the one abstraction that matters)
 
@@ -106,10 +119,16 @@ Decoder-only transformer, the modern small-LM recipe:
 
 Two size presets to start (`config.py`):
 
-| Preset | Params | Layers | d_model | Heads | Context | Use |
-|---|---|---|---|---|---|---|
-| `tiny` | ~15M | 6 | 256 | 4 | 256 | Fast iteration — prove the pipeline works end to end |
-| `small` | ~50M | 8 | 512 | 8 | 512 | The "real" run once `tiny` is verified |
+| Preset | Params | Layers | d_model | Heads | Context | Batch | Steps | Use |
+|---|---|---|---|---|---|---|---|---|
+| `tiny` | 5.87M | 6 | 256 | 4 | 256 | 32 | 2000 | Fast iteration — prove the pipeline works end to end |
+| `small` | 27.80M | 8 | 512 | 8 | 512 | 16 | 5000 | The "real" run once `tiny` is verified |
+
+`config.py` computes those parameter counts from the shapes rather than
+hardcoding them, and `python config.py` prints the full breakdown per preset.
+Note where the parameters actually sit: at this scale the feed-forward blocks
+dominate (55% of `tiny`), not the embedding table (18%), which is a large part
+of why a 4096-token vocabulary is a reasonable choice here — see §3.2.
 
 ### 3.4 Training loop
 
@@ -135,10 +154,11 @@ raw text chunks
    │  tokenizer/tokenizer.py: encode()
    ▼
 token ID sequences
-   │  data/prepare.py: pack into fixed-length training windows
+   │  data/prepare.py: concatenate into one flat uint16 stream per split
    ▼
-.npy shards
-   │  train.py: load shards, train model.py, checkpoint + log
+data/tokens/{train,val}.npy + meta.json
+   │  train.py: load the stream, slice random training windows out of
+   │            it at batch time, train model.py, checkpoint + log
    ▼
 checkpoints/ + logs/
    │  sample.py: load checkpoint, generate
@@ -182,14 +202,16 @@ These should run in seconds, with no real training, and belong in a normal
 |---|---|---|
 | `adapters/plain_text.py` | `read()` on a small fixture file yields the expected number/shape of text chunks | Silent adapter bugs (wrong chunking, dropped trailing text) are easy to introduce and easy to miss by eye |
 | `tokenizer.py` | `encode(decode(ids)) == ids` and `decode(encode(text))` round-trips correctly on a handful of fixture strings, including edge cases (empty string, unknown characters, whitespace runs) | A silently broken round-trip poisons every downstream stage without an obvious symptom |
-| `data/prepare.py` | packed shards have the expected dtype, shape, and no token IDs outside `[0, vocab_size)` | Out-of-range IDs crash training far from the actual bug — catch it here instead |
+| `data/prepare.py` | the written streams have the expected dtype (`uint16`), the train/val split lands where it should, and no token ID falls outside `[0, vocab_size)` | Out-of-range IDs crash training far from the actual bug — catch it here instead |
 | `model.py` | a forward pass on a small dummy batch produces the expected output shape `(batch, seq_len, vocab_size)`; running the same input twice with the same weights gives identical output (determinism check) | Shape bugs in attention/RoPE are the single most common bug class in from-scratch transformer code, and are cheap to catch with a shape assertion before ever starting real training |
 | `model.py` | a single gradient step on a tiny batch changes the weights (i.e. gradients aren't silently zero) | Catches a whole class of "training runs, loss never moves" bugs (frozen params, detached tensors, wrong loss reduction) in seconds, without waiting for a real training run to reveal it |
-| `sample.py` | temperature=0 (or very low) sampling is deterministic and reproducible; output length respects `max_tokens` | Confirms the generation loop's control flow is correct independent of whether the model's outputs are any good |
+| `train.py` | `get_batch` returns inputs and targets offset by exactly one, the LR schedule warms up and decays to the floor, the optimizer split puts matrices under weight decay and vectors outside it, and a checkpoint round-trips its config | These are all *silently* wrong when wrong: an off-by-one in the targets still trains, just toward the wrong objective |
+| `sample.py` | temperature=0 (or very low) sampling is deterministic and reproducible; top-k and top-p mask exactly the tokens they claim to; output length respects `max_tokens` | Confirms the generation loop's control flow is correct independent of whether the model's outputs are any good |
 
 Run these on every change to `model.py`, the tokenizer, or the data pipeline
 — per `CLAUDE.md`, this is the "smoke test before a full run" step, not
-optional cleanup.
+optional cleanup. The suite is currently 151 tests and runs in under two
+seconds, which is the point: there is no excuse not to run it.
 
 ### 6.2 Learning correctness — observed, not asserted
 
@@ -225,8 +247,21 @@ should be stated up front rather than discovered by disappointment:
 
 - All §6.1 unit tests pass.
 - The overfit-one-batch test succeeds.
-- Loss on the real dataset decreases over training and sample generations
-  visibly shift from noise toward corpus-like style by the end of a run.
+- **Training** loss on the real dataset decreases smoothly, and sample
+  generations visibly shift from noise toward corpus-like style by the end
+  of a run.
+- **Validation** loss falls, reaches a minimum, and is *reported* — including
+  when it then turns and climbs.
+
+That last point is deliberately not "validation loss keeps falling," because
+on this corpus it does not. The first real 2000-step `tiny` run reached its
+best held-out loss of 4.36 (perplexity 79) around step 300 and finished at
+6.40 (perplexity 601) while training loss kept dropping to 0.47. That is
+textbook overfitting: a 5.9M-parameter model making many passes over roughly
+300k tokens of Shakespeare memorises it. The run is a success by this bar —
+the pipeline works, the divergence is real and visible, and §6.2's
+held-out-perplexity check is exactly what surfaced it. Hiding that behind a
+"loss decreases" claim would be the dishonest version.
 
 That's the definition of "this project worked" — not "the model produces
 impressive text." Keep that bar visible (e.g. in a project README) so it's
@@ -252,7 +287,7 @@ not accumulating features.
 
 ## 8. Non-goals worth stating explicitly
 
-- **Not** trying to produce a "good" or "useful" language model. A 15-50M
+- **Not** trying to produce a "good" or "useful" language model. A 6-28M
   parameter model trained on a small corpus will not be reliably coherent —
   see the model's `README` / generated samples for honest examples of this.
   The goal is understanding the mechanism, not competing with real LLMs.

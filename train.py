@@ -239,11 +239,6 @@ def evaluate(
 
 
 # ---------------------------------------------------------------------------
-# Sample previews during training
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Checkpoints
 # ---------------------------------------------------------------------------
 
@@ -509,6 +504,13 @@ def train(
 
         is_last = step == train_cfg.max_steps - 1
 
+        # Held-out loss is measured at most once per step and reused. A step
+        # that is both an eval step and a checkpoint step (every 500th here,
+        # and always the last one) would otherwise call evaluate() twice over
+        # different random batches, and report two different validation losses
+        # for the same weights, which reads as instability that is not there.
+        val_loss: float | None = None
+
         if (step + 1) % train_cfg.log_interval == 0 or is_last:
             elapsed = time.perf_counter() - interval_start
             mean_loss = interval_loss_sum / interval_steps
@@ -557,7 +559,8 @@ def train(
 
         if out_dir is not None and ((step + 1) % train_cfg.checkpoint_interval == 0 or is_last):
             path = out_dir / f"{preset_name}-step{step + 1}{CHECKPOINT_SUFFIX}"
-            val_loss = evaluate(model, val_tokens, train_cfg, context_len)
+            if val_loss is None:
+                val_loss = evaluate(model, val_tokens, train_cfg, context_len)
             save_checkpoint(path, model, preset_name, step + 1, val_loss)
             log(f"  [checkpoint] {path} (val loss {val_loss:.4f})")
             interval_start = time.perf_counter()

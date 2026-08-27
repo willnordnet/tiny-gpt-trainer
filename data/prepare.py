@@ -1,7 +1,13 @@
-"""Turn a text source into packed token shards ready for training.
+"""Turn a text source into token shards ready for training.
 
 This is the last stage that knows anything about text. Everything after it
 (model.py, train.py) sees only integer arrays.
+
+Each split is written as one flat uint16 stream, not as pre-cut fixed-length
+windows. Training windows are sliced out of that stream at batch time
+(train.py: get_batch), because pre-packing at stride 1 would store every token
+context_len times over, and pre-packing at stride context_len would throw away
+all but 1/context_len of the available windows.
 
 Usage:
 

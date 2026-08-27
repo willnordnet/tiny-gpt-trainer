@@ -269,7 +269,3 @@ if __name__ == "__main__":
         print(describe(preset))
         print()
 
-    print("Note: DESIGN.md section 3.3 estimates these at ~15M and ~50M params.")
-    print("The counts above are the arithmetic for the dimensions it specifies,")
-    print("with tied embeddings and a 4096 vocab. Treat this file as the")
-    print("authority and DESIGN.md's figures as a rough early guess.")

@@ -55,7 +55,11 @@ completion:
 - **Tokenizer training**: log vocab size, a handful of example
   encode/decode round-trips.
 - **Data prep**: log number of raw examples, number of tokens after
-  encoding, number of packed training windows produced.
+  encoding, the train/val split, and how many training windows that many
+  tokens makes available at the configured context length. Note that the
+  windows are a *count*, not an artifact: each split is written as one flat
+  `uint16` stream and windows are sliced out of it at batch time
+  (`train.py: get_batch`), so nothing pre-packed is ever stored.
 - **Training loop**: log step number, loss, tokens/sec, and — at a
   configurable interval (e.g. every N steps) — a short sample generation
   from the model's current weights, so degradation/improvement is visible

@@ -167,7 +167,7 @@ step    60/60  loss 5.5241  lr 1.80e-04  grad_norm  1.068    37,515 tok/s
   [sample @ step 60] prompt='ROMEO:' temperature=0.8
   'ROMEO:\n\nSecond, never say we own, be a traitor on.\nPOMPEYed too the shame...'
 
-  [checkpoint] checkpoints/tiny-step60.safetensors (val loss 5.4524)
+  [checkpoint] checkpoints/tiny-step60.safetensors (val loss 5.4396)
 ```
 
 Checkpoints are `.safetensors` rather than `.npz`, because safetensors files
@@ -190,18 +190,25 @@ costs about two minutes on `tiny`.
 
 ```
   step    0  loss  8.2938  grad_norm  7.0610
-  step  200  loss  1.4585  grad_norm  2.1044
-  step  499  loss  0.0077  grad_norm  0.0208
+  step  200  loss  2.0878  grad_norm  1.6385
+  step  499  loss  0.0440  grad_norm  0.6454
 
-PASS: final loss is 0.1% of the uniform-guess loss.
+start loss     8.2938
+final loss     0.0440
+uniform-guess loss  ln(4096) = 8.3178
+
+PASS: final loss is 0.5% of the uniform-guess loss.
 ```
 
 The check distinguishes two failures that wear the same number. A loss still
 falling steeply at the last step is reported as *inconclusive* (too few steps),
 not as a failure. A loss that has gone flat well above zero is the real failure
 signature, and the one worth stopping for. The default of 500 steps is measured
-rather than guessed: at 200 steps `tiny` is only down to ~1.67 and still
-descending fast, which looks like a broken model but is not one.
+rather than guessed: the same check capped at 200 steps ends at 1.67, which is
+20% of the uniform-guess loss and reads as a hard FAIL, even though the model is
+fine and simply still descending. Note the step-200 line above sits at 2.09 in
+this run: the fixed batch is drawn at random, so the curve moves between runs and
+only the collapse itself is the signal.
 
 ### 4. Sample
 
@@ -254,11 +261,16 @@ second, subtly different attention path in the codebase.
 **What the knobs actually do.** Each reshapes the next-token distribution
 before a token is drawn from it:
 
-| Flag | Effect | Reach for it when |
-|---|---|---|
-| `--temperature` | Divides the logits. Below 1 sharpens the distribution, above 1 flattens it. Never reorders tokens. | Trading coherence against variety |
-| `--top-k` | Keeps the k highest-scoring tokens, rest get zero probability. Reads only the ranking, so temperature does not change what it keeps. | You want a hard cap on how weird the choice can get |
-| `--top-p` | Keeps the smallest set of tokens covering p of the probability mass. The *count* varies with the shape of the distribution. | You want the cap to relax when the model is genuinely torn and tighten when it is confident |
+| Flag | Default | Effect | Reach for it when |
+|---|---|---|---|
+| `--temperature` | `0.8` | Divides the logits. Below 1 sharpens the distribution, above 1 flattens it. Never reorders tokens. | Trading coherence against variety |
+| `--top-k` | `40` | Keeps the k highest-scoring tokens, rest get zero probability. Reads only the ranking, so temperature does not change what it keeps. `0` disables it. | You want a hard cap on how weird the choice can get |
+| `--top-p` | `1.0` (off) | Keeps the smallest set of tokens covering p of the probability mass. The *count* varies with the shape of the distribution. | You want the cap to relax when the model is genuinely torn and tighten when it is confident |
+
+The remaining flags are `--max-tokens 200`, `--seed 0`, `--num-samples 1`,
+`--prompt 'ROMEO:'`, and `--vocab vocab.json`. Every run prints the settings it
+used above its output, so a generation you liked can be reproduced from the log
+alone.
 
 `--temperature 0` is greedy decoding (always the argmax) and is exactly
 reproducible. It is also the clearest demonstration of why nobody ships greedy
@@ -319,9 +331,12 @@ A TORN distribution (no clear winner), same settings
 ## What a real run looks like
 
 Everything below is from one 2000-step `tiny` run on TinyShakespeare, about
-eight minutes on an M-series Mac, logged to `logs/run-20260827-091048-tiny.log`.
-The numbers are copied out of that log rather than reconstructed, including the
-part that does not flatter the model.
+eight minutes on an M-series Mac. The numbers are copied out of that run's log
+rather than reconstructed, including the part that does not flatter the model.
+(`logs/` is gitignored, so the file itself is not in the repo. Reproducing the
+run is the two commands in the Quick start followed by `python train.py
+--preset tiny --data data/tokens`; the figures below will be close but not
+identical, since the batch order is seeded per run.)
 
 ### The loss curve
 
@@ -464,14 +479,19 @@ model moved from the first block to the second, not that it wrote a good play.
 Set with `--preset`. Defined in `config.py`, which prints the exact parameter
 breakdown when run directly (`python config.py`).
 
-| Preset | Layers | d_model | Heads | Context | Params | Use |
-|---|---|---|---|---|---|---|
-| `tiny` | 6 | 256 | 4 | 256 | ~5.9M | Fast iteration, prove the pipeline end to end |
-| `small` | 8 | 512 | 8 | 512 | ~28M | The "real" run once `tiny` is verified |
+| Preset | Layers | d_model | Heads | Context | Batch | Steps | Params | Use |
+|---|---|---|---|---|---|---|---|---|
+| `tiny` | 6 | 256 | 4 | 256 | 32 | 2000 | 5.87M | Fast iteration, prove the pipeline end to end |
+| `small` | 8 | 512 | 8 | 512 | 16 | 5000 | 27.80M | The "real" run once `tiny` is verified |
 
-Note: `DESIGN.md` §3.3 estimates these at ~15M and ~50M. Those figures do not
-match the stated dimensions once tied embeddings and a 4096 vocab are accounted
-for. The table above is the arithmetic; `config.py` is the authority.
+`small` uses the smaller batch despite being the larger model: its context is
+twice as long, so 16 x 512 and 32 x 256 are both 8,192 tokens per step. The
+step count is what actually differs.
+
+Where the parameters sit is worth a look, since it is not where people expect
+at this scale. For `tiny`: feed-forward 3.24M (55%), attention 1.57M (27%),
+the tied embedding table 1.05M (18%), norms 3.3k. The embedding table is the
+*small* part, which is what makes a 4096-token vocabulary affordable here.
 
 The architecture is the modern small-LM recipe rather than the original GPT-2
 one: RoPE instead of learned position embeddings, RMSNorm instead of LayerNorm,

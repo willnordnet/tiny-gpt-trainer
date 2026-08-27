@@ -1,6 +1,6 @@
 """The adapter interface: the one abstraction in this project that matters.
 
-Everything downstream of an adapter (tokenizer, packed shards, model, training
+Everything downstream of an adapter (tokenizer, token shards, model, training
 loop, sampler) works on text and knows nothing about where that text came from.
 That is the entire point: an adapter is the *only* place domain-specific logic
 is allowed to live. Adding a new domain later should mean writing one new file
