@@ -148,22 +148,66 @@ Logs step, loss, tokens/sec, periodic held-out validation loss, and a short
 sample generation every N steps, so improvement is something you watch rather
 than infer from a number. Output goes to stdout and `logs/run-<timestamp>.log`.
 
+Every loss is printed against `ln(4096) = 8.318`, which is what a model that has
+learned nothing scores by spreading its probability evenly over the vocabulary.
+That is the honest zero point: anything below it is real learning, and the first
+few steps sitting just under it is expected rather than alarming.
+
+Weight decay is applied to matrices but not to the 1-D RMSNorm scales, since
+shrinking a normalisation scale toward zero fights the thing the layer exists to
+do. That split is why the optimiser is a `MultiOptimizer` rather than a plain
+`AdamW`.
+
+```
+step    10/60  loss 7.8886  lr 3.00e-05  grad_norm  2.120    35,376 tok/s
+step    30/60  loss 6.4557  lr 9.00e-05  grad_norm  0.991    35,424 tok/s
+step    60/60  loss 5.5241  lr 1.80e-04  grad_norm  1.068    37,515 tok/s
+  [eval] val loss 5.4396  perplexity    230.3  (uniform guess would be 4096)
+
+  [sample @ step 60] prompt='ROMEO:' temperature=0.8
+  'ROMEO:\n\nSecond, never say we own, be a traitor on.\nPOMPEYed too the shame...'
+
+  [checkpoint] checkpoints/tiny-step60.safetensors (val loss 5.4524)
+```
+
+Checkpoints are `.safetensors` rather than `.npz`, because safetensors files
+carry a string metadata dict alongside the arrays. The `ModelConfig` and step
+number travel *inside* the checkpoint, so `sample.py` rebuilds the right
+architecture from the file alone rather than from a path plus a promise that you
+remembered which preset it was.
+
 **Before any real run, run the overfit check first:**
 
 ```bash
 python train.py --preset tiny --data data/tokens --overfit-one-batch
 ```
 
-This trains on a single fixed batch for many steps. Loss should collapse toward
-zero. If it does not, something is broken in `model.py` or `train.py`, and a
-real dataset will never train correctly. This is the single most useful sanity
-check in the project (`DESIGN.md` §6.2) and it costs seconds.
+This trains on a single fixed batch for 500 steps, letting the model memorise it
+outright. Loss should collapse toward zero. If it does not, something is broken
+in `model.py` or `train.py`, and a real dataset will never train correctly. This
+is the single most useful sanity check in the project (`DESIGN.md` §6.2) and it
+costs about two minutes on `tiny`.
+
+```
+  step    0  loss  8.2938  grad_norm  7.0610
+  step  200  loss  1.4585  grad_norm  2.1044
+  step  499  loss  0.0077  grad_norm  0.0208
+
+PASS: final loss is 0.1% of the uniform-guess loss.
+```
+
+The check distinguishes two failures that wear the same number. A loss still
+falling steeply at the last step is reported as *inconclusive* (too few steps),
+not as a failure. A loss that has gone flat well above zero is the real failure
+signature, and the one worth stopping for. The default of 500 steps is measured
+rather than guessed: at 200 steps `tiny` is only down to ~1.67 and still
+descending fast, which looks like a broken model but is not one.
 
 ### 4. Sample
 
 ```bash
 python sample.py \
-  --checkpoint checkpoints/tiny-step1000.npz \
+  --checkpoint checkpoints/tiny-step1000.safetensors \
   --prompt "ROMEO:" \
   --max-tokens 200 \
   --temperature 0.8 \
@@ -230,17 +274,19 @@ pytest
 ```
 
 These cover plumbing correctness: adapter chunk counts, tokenizer round trips,
-token-id ranges and dtypes, forward-pass shapes, determinism, and the check
-that a gradient step actually moves the weights. Run them after any change to
-the tokenizer, the data pipeline, or `model.py`.
+token-id ranges and dtypes, forward-pass shapes, determinism, that targets are
+inputs shifted by exactly one, that the learning-rate schedule has the right
+shape, that weight decay reaches matrices but not RMSNorm scales, and that a
+checkpoint round-trips to bit-identical logits. Run them after any change to the
+tokenizer, the data pipeline, `model.py`, or `train.py`.
 
 ## What "it worked" means
 
 The acceptance bar, per `DESIGN.md` §6.3, stated so this is judged on its own
 terms:
 
-- [ ] All `pytest` tests pass.
-- [ ] `--overfit-one-batch` drives loss to near zero.
+- [x] All `pytest` tests pass. (109 of them, in 0.8s.)
+- [x] `--overfit-one-batch` drives loss to near zero. (8.294 -> 0.0077.)
 - [ ] Loss on the real dataset decreases and roughly plateaus, without spiking
       or going NaN.
 - [ ] Sample generations visibly shift from noise toward corpus-like style over
@@ -292,7 +338,7 @@ one commit. Current state:
 - [x] Step 3: `tokenizer/`
 - [x] Step 4: `data/prepare.py`
 - [x] Step 5: `model.py`
-- [ ] Step 6: `train.py`
+- [x] Step 6: `train.py`
 - [ ] Step 7: `sample.py`
 - [ ] Step 8: first real run, honest samples pasted here
 
