@@ -42,6 +42,7 @@ from mlx.utils import tree_flatten, tree_unflatten
 from config import PRESETS, ModelConfig, TrainConfig, describe
 from data.prepare import load_tokens, verify_tokenizer_matches
 from model import TinyGPT
+from sample import generate_text
 from tokenizer.tokenizer import BPETokenizer
 
 # Checkpoints are written as safetensors rather than .npz because safetensors
@@ -240,48 +241,6 @@ def evaluate(
 # ---------------------------------------------------------------------------
 # Sample previews during training
 # ---------------------------------------------------------------------------
-
-
-def generate_preview(
-    model: TinyGPT,
-    tokenizer: BPETokenizer,
-    prompt: str,
-    max_tokens: int,
-    temperature: float,
-) -> str:
-    """Generate a short continuation, for watching the model improve mid-run.
-
-    This is a minimal temperature-only sampler. The full one with top-k and
-    top-p lives in sample.py; it is not duplicated here because for a training
-    preview you actively *want* the unfiltered distribution, warts included.
-    Truncation strategies make a bad model look better than it is, which is the
-    opposite of what a progress check is for.
-
-    Note there is no KV cache: each new token re-runs the whole forward pass
-    over the whole prefix so far, which is O(n^2) work for n tokens. At preview
-    lengths of a few dozen tokens that is nothing, and a cache is a meaningful
-    amount of machinery for something that would not change a single output.
-    """
-    ids = tokenizer.encode(prompt) or [0]
-
-    for _ in range(max_tokens):
-        # Never feed more than the trained context length. RoPE would not crash
-        # on a longer prefix, but the model has never seen those distances.
-        window = ids[-model.cfg.context_len :]
-
-        logits = model(mx.array([window], dtype=mx.int32))
-
-        # Only the last position matters: that is the prediction for the token
-        # that comes after everything seen so far.
-        next_logits = logits[0, -1] / temperature
-
-        # Sampling from the softmax, rather than taking the argmax, is what
-        # makes generation vary. mx.random.categorical takes unnormalised
-        # logits directly.
-        next_id = int(mx.random.categorical(next_logits))
-        ids.append(next_id)
-
-    return tokenizer.decode(ids)
 
 
 # ---------------------------------------------------------------------------
@@ -581,7 +540,13 @@ def train(
             interval_start = time.perf_counter()  # do not bill eval time to training
 
         if tokenizer is not None and ((step + 1) % train_cfg.sample_interval == 0 or is_last):
-            text = generate_preview(
+            # top_k and top_p are deliberately left at their defaults, which
+            # means off. A mid-run preview is a progress check, and a progress
+            # check wants the distribution the model actually learned, tail and
+            # all. Truncating that tail is exactly what those two knobs are for
+            # at sampling time, and it would make a bad model read as better
+            # than it is, which is the opposite of what this output is for.
+            text = generate_text(
                 model, tokenizer, sample_prompt, max_tokens=80, temperature=0.8
             )
             log("")

@@ -34,7 +34,6 @@ import mlx.core as mx
 
 from model import TinyGPT
 from tokenizer.tokenizer import BPETokenizer
-from train import load_checkpoint
 
 # Masked-out tokens are set to negative infinity rather than to a large negative
 # number. exp(-inf) is exactly 0, so a rejected token receives exactly zero
@@ -227,6 +226,15 @@ def generate(
 
     Returns:
         prompt_ids followed by exactly `max_tokens` newly generated ids.
+
+    There is no KV cache. Every iteration re-runs the full forward pass over
+    the entire prefix, recomputing keys and values for tokens that have not
+    changed since the last step, which makes generating n tokens O(n^2) work
+    instead of O(n). A cache is a pure performance optimisation: it cannot
+    change a single token of the output, only how fast it arrives. Adding one
+    would mean a second attention code path in the repo that has to stay
+    behaviourally identical to the first, which is a real maintenance cost to
+    pay for a speedup on samples that already take under a second.
     """
     if max_tokens < 0:
         raise ValueError(f"max_tokens={max_tokens} must be >= 0")
@@ -496,6 +504,15 @@ def main() -> None:
     # Seeding makes a generation reproducible, which matters because "the model
     # produced this" is only a meaningful claim if the run can be repeated.
     mx.random.seed(args.seed)
+
+    # Imported here rather than at the top of the file, and the reason is worth
+    # stating: the library half of this module (generate, and the three knobs)
+    # has no dependency on training at all, which is what lets it be tested
+    # against a model that was never trained. Only the CLI needs to read a
+    # checkpoint off disk. Keeping the import local says that out loud, and it
+    # also breaks what would otherwise be an import cycle, since train.py calls
+    # generate_text() for its mid-run previews.
+    from train import load_checkpoint
 
     checkpoint = Path(args.checkpoint)
     model, metadata = load_checkpoint(checkpoint)
