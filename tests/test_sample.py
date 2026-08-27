@@ -349,6 +349,85 @@ def test_generate_text_returns_the_prompt_followed_by_a_continuation(model):
     assert len(text) > len("ROMEO:")
 
 
+# --- streaming the text out as it is produced ------------------------------
+#
+# generate_text can hand each new piece of text to a sink as it appears, which
+# is what the web viewer writes to a socket and what the CLI prints. Both go
+# through one implementation; these tests pin down the contract of each.
+
+
+def test_on_text_deltas_are_exactly_the_continuation_and_never_the_prompt(model):
+    """A caller streaming to a browser already has the prompt on screen, so
+    echoing it back would render it twice.
+
+    Stated as a reconstruction rather than a prefix check: asserting the
+    deltas do not *start with* the prompt would be fragile, because a greedy
+    untrained model cheerfully emits the prompt's own words back as its first
+    continuation. Reconstruction pins the boundary exactly.
+    """
+    tokenizer = BPETokenizer([])
+    mx.random.seed(0)
+
+    deltas: list[str] = []
+    text = generate_text(
+        model, tokenizer, "ROMEO:", max_tokens=12, temperature=0.0,
+        on_text=deltas.append,
+    )
+
+    assert "ROMEO:" + "".join(deltas) == text
+
+
+def test_streaming_to_stdout_prints_the_prompt_then_the_continuation(model, capsys):
+    """The CLI's output shape, asserted so the sink refactor cannot change it."""
+    tokenizer = BPETokenizer([])
+    mx.random.seed(0)
+
+    text = generate_text(
+        model, tokenizer, "ROMEO:", max_tokens=10, temperature=0.0, stream=True
+    )
+
+    printed = capsys.readouterr().out
+    assert printed == text + "\n"  # trailing newline closes the streamed line
+
+
+def test_an_explicit_sink_wins_over_printing_to_stdout(model, capsys):
+    """stream=True picks stdout only when no sink was given, so a caller can
+    ask for the prompt echo without also getting the continuation printed."""
+    tokenizer = BPETokenizer([])
+    mx.random.seed(0)
+
+    deltas: list[str] = []
+    generate_text(
+        model, tokenizer, "ROMEO:", max_tokens=8, temperature=0.0,
+        stream=True, on_text=deltas.append,
+    )
+
+    printed = capsys.readouterr().out
+    assert deltas, "the sink got nothing"
+    assert printed == "ROMEO:\n"  # the prompt echo and the closing newline, no more
+
+
+def test_no_sink_means_no_streaming_work_at_all(model, capsys):
+    tokenizer = BPETokenizer([])
+    mx.random.seed(0)
+
+    generate_text(model, tokenizer, "ROMEO:", max_tokens=8, temperature=0.0)
+
+    assert capsys.readouterr().out == ""
+
+
+def test_a_sink_is_not_called_when_nothing_is_generated(model):
+    tokenizer = BPETokenizer([])
+
+    deltas: list[str] = []
+    text = generate_text(
+        model, tokenizer, "ROMEO:", max_tokens=0, on_text=deltas.append
+    )
+
+    assert deltas == []
+    assert text == "ROMEO:"
+
+
 def test_generate_text_is_reproducible_under_a_fixed_seed(model):
     tokenizer = BPETokenizer([])
 

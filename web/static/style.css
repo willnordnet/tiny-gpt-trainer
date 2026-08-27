@@ -84,7 +84,7 @@ header p {
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-faint); }
 
-input[type="text"], input[type="number"], select {
+input[type="text"], input[type="number"], select, textarea {
   background: var(--bg);
   border: 1px solid var(--line);
   color: var(--ink);
@@ -92,10 +92,13 @@ input[type="text"], input[type="number"], select {
   padding: 6px 8px;
   border-radius: 4px;
 }
-input[type="text"]:focus, input[type="number"]:focus, select:focus {
+input[type="text"]:focus, input[type="number"]:focus, select:focus, textarea:focus {
   outline: 1px solid var(--accent);
   border-color: var(--accent);
 }
+/* A prompt is naturally multi-line -- "ROMEO:\nWhat ho!" -- so the box is
+   resizable vertically but not horizontally, which would break the grid. */
+textarea { resize: vertical; line-height: 1.5; width: 100%; }
 input[type="range"] { accent-color: var(--accent); width: 100%; }
 input[type="checkbox"] { accent-color: var(--accent); }
 
@@ -166,6 +169,17 @@ svg text { font: 10px var(--mono); fill: var(--ink-faint); }
   font-size: 12px;
   line-height: 1.55;
 }
+
+/* The prompt is echoed dim and the continuation bright, so the two read as one
+   passage while it stays obvious where the model took over. */
+.sample-text .echo { color: var(--ink-faint); }
+.sample-text .cursor {
+  display: inline-block;
+  width: 7px;
+  background: var(--accent);
+  animation: blink 1s steps(2, start) infinite;
+}
+@keyframes blink { to { visibility: hidden; } }
 
 /* --- probability lab ----------------------------------------------------- */
 

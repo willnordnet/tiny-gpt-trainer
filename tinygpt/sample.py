@@ -278,15 +278,29 @@ def generate_text(
     top_k: int = 0,
     top_p: float = 1.0,
     stream: bool = False,
+    on_text: Callable[[str], None] | None = None,
 ) -> str:
     """Encode a prompt, generate, decode. The text-level wrapper around generate().
 
-    When `stream` is set, text is printed as it is produced rather than at the
-    end. Streaming re-decodes the whole id list each step and prints whatever is
-    new, because a BPE token is a byte sequence and can end partway through a
-    multi-byte character: decoding tokens one at a time in isolation would print
-    a replacement character where a perfectly valid character was being built up
-    across two tokens.
+    Text can be delivered as it is produced rather than all at the end:
+
+    - `stream=True` prints it to stdout, which is what the CLI wants.
+    - `on_text` hands each new piece of text to a callback instead, which is
+      what a caller writing to a socket wants.
+
+    Both go through one implementation, because the way the text is cut into
+    pieces is subtle enough that two copies of it would be a liability. A BPE
+    token is a sequence of *bytes*, and a character like "é" can be split
+    across two of them. Decoding each token alone would emit a replacement
+    character where a perfectly good character was half-built, so instead the
+    whole id list is re-decoded every step and only the newly appeared text is
+    handed on. That rule lives here once; see also the argument in generate()
+    for why this repo would rather have one slow path than two fast ones that
+    must stay identical.
+
+    A sink receives the continuation only, never the prompt. The CLI echoes the
+    prompt itself so the output reads as one passage, but a caller that already
+    has the prompt in hand does not want it streamed back.
     """
     prompt_ids = tokenizer.encode(prompt)
 
@@ -295,22 +309,29 @@ def generate_text(
     # newly sampled id, which keeps it independent of any tokenizer; the cost is
     # that a streaming caller has to keep count itself.
     streamed_ids = list(prompt_ids) or [0]
-    printed = 0
+    prompt_text = tokenizer.decode(streamed_ids)
+
+    def print_to_stdout(new_text: str) -> None:
+        print(new_text, end="", flush=True)
+
+    sink = on_text
+    if stream:
+        # Echo the prompt so the continuation reads as one passage.
+        print_to_stdout(prompt_text)
+        if sink is None:
+            sink = print_to_stdout
+
+    # Primed past the prompt, so a sink is only ever handed the continuation.
+    printed = len(prompt_text)
 
     def emit(new_id: int) -> None:
         nonlocal printed
         streamed_ids.append(new_id)
         text_so_far = tokenizer.decode(streamed_ids)
-        print(text_so_far[printed:], end="", flush=True)
-        printed = len(text_so_far)
-
-    if stream:
-        # Print the prompt first so the continuation reads as one passage, and
-        # prime `printed` with its length so the first emitted token does not
-        # reprint it.
-        prompt_text = tokenizer.decode(streamed_ids)
-        print(prompt_text, end="", flush=True)
-        printed = len(prompt_text)
+        new_text = text_so_far[printed:]
+        if new_text:
+            sink(new_text)
+            printed = len(text_so_far)
 
     all_ids = generate(
         model=model,
@@ -319,7 +340,7 @@ def generate_text(
         temperature=temperature,
         top_k=top_k,
         top_p=top_p,
-        on_token=emit if stream else None,
+        on_token=emit if sink is not None else None,
     )
 
     if stream:

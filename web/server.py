@@ -155,7 +155,7 @@ class Handler(BaseHTTPRequestHandler):
                     head=int(body.get("head", 0)),
                 ))
             elif route == "/api/generate":
-                self._send_json(self._generate(self._read_json()))
+                self._stream_generation(self._read_json())
             else:
                 self._send_json({"error": f"no route {route}"}, status=404)
         except BrokenPipeError:
@@ -316,29 +316,53 @@ class Handler(BaseHTTPRequestHandler):
         job = REGISTRY.start(stages)
         return {"started": True, "stages": [stage.name for stage in job.stages]}
 
-    def _generate(self, body: dict) -> dict:
-        from tinygpt.sample import generate_text
+    def _stream_generation(self, body: dict) -> None:
+        """Continue a prompt, writing each new piece of text as it is produced.
 
+        Newline-delimited JSON rather than server-sent events. SSE would be the
+        obvious choice, but the browser's EventSource can only issue GET
+        requests and a prompt belongs in a request body, so the page reads this
+        with fetch() and a stream reader -- and NDJSON is less to parse than
+        SSE framing once EventSource is not involved.
+
+        No Content-Length is sent. BaseHTTPRequestHandler speaks HTTP/1.0, so
+        the response ends when the connection closes, which is also how
+        _stream_events above gets away with it.
+
+        Stopping is free and needs no endpoint: if the browser aborts the
+        fetch, the write below raises BrokenPipeError inside the sink, which
+        propagates out through generate() and ends the loop. do_POST already
+        swallows that exception.
+        """
         checkpoint = body["checkpoint"]
-        model, metadata = introspect._load(checkpoint)
-        # Same guard as the other panels: a checkpoint decoded with the wrong
-        # vocabulary produces confident-looking nonsense rather than an error.
-        tokenizer = introspect._checked_tokenizer(model, checkpoint, "vocab.json")
-        started = time.perf_counter()
-        text = generate_text(
-            model,
-            tokenizer,
+
+        # Resolve the model before writing any headers, so a bad checkpoint or
+        # a vocabulary mismatch is still a clean 500 with a JSON error rather
+        # than a half-written stream the page has to guess about.
+        model, _ = introspect._load(checkpoint)
+        introspect._checked_tokenizer(model, checkpoint, "vocab.json")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        def write(payload: dict) -> None:
+            self.wfile.write(f"{json.dumps(payload)}\n".encode("utf-8"))
+            self.wfile.flush()  # per line, or the deltas sit in a buffer
+
+        summary = introspect.generate_completion(
+            checkpoint=checkpoint,
             prompt=body.get("prompt", ""),
-            max_tokens=int(body.get("max_tokens", 120)),
+            max_tokens=int(body.get("max_tokens", 200)),
             temperature=float(body.get("temperature", 0.8)),
             top_k=int(body.get("top_k", 0)),
             top_p=float(body.get("top_p", 1.0)),
+            on_text=lambda delta: write({"delta": delta}),
         )
-        return {
-            "text": text,
-            "step": int(metadata.get("step", 0)),
-            "seconds": round(time.perf_counter() - started, 3),
-        }
+
+        summary.pop("continuation")  # already sent, delta by delta
+        write({"done": True, **summary})
 
 
 def main() -> None:

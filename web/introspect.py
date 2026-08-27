@@ -16,11 +16,13 @@ That contention is real and the UI says so rather than hiding it.
 """
 
 import math
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import mlx.core as mx
 
-from tinygpt.sample import reshape_logits
+from tinygpt.sample import generate_text, reshape_logits
 from tinygpt.tokenizer.tokenizer import BPETokenizer
 from tinygpt.train import CHECKPOINT_SUFFIX, load_checkpoint
 
@@ -200,6 +202,71 @@ def _entropy(probs: mx.array) -> float:
     """Shannon entropy in nats, guarding log(0) for masked-out tokens."""
     safe = mx.where(probs > 0, probs, mx.ones_like(probs))
     return float(-mx.sum(probs * mx.log(safe)))
+
+
+def generate_completion(
+    checkpoint: str,
+    prompt: str,
+    max_tokens: int = 200,
+    temperature: float = 0.8,
+    top_k: int = 0,
+    top_p: float = 1.0,
+    on_text: Callable[[str], None] | None = None,
+    vocab_path: str = "vocab.json",
+) -> dict:
+    """Continue a prompt, optionally handing text to a sink as it is produced.
+
+    Note what this is and is not. The model is a base language model trained on
+    next-token prediction: it continues a prefix in the style of its corpus. It
+    has no instruction tuning and no chat template -- there are no special
+    tokens in this project at all -- so it cannot answer a question or hold a
+    conversation, and a caller should not present it as though it could.
+
+    Streaming goes through generate_text's `on_text` sink rather than being
+    reimplemented here, because cutting generated text into pieces is subtler
+    than it looks: a BPE token is bytes, and a character can straddle two of
+    them. That rule belongs in one place.
+    """
+    model, metadata = _load(checkpoint)
+    tokenizer = _checked_tokenizer(model, checkpoint, vocab_path)
+
+    prompt_ids = tokenizer.encode(prompt)
+    context_len = model.cfg.context_len
+
+    started = time.perf_counter()
+    full_text = generate_text(
+        model,
+        tokenizer,
+        prompt=prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+        on_text=on_text,
+    )
+    elapsed = time.perf_counter() - started
+
+    # generate_text returns prompt + continuation; a caller that already has
+    # the prompt wants only what was added. Slicing by the decoded prompt
+    # rather than by len(prompt) because an empty prompt becomes token 0, which
+    # decodes to something.
+    prompt_text = tokenizer.decode(list(prompt_ids) or [0])
+    continuation = full_text[len(prompt_text):]
+
+    return {
+        "checkpoint": checkpoint,
+        "step": int(metadata.get("step", 0)),
+        "continuation": continuation,
+        "prompt_tokens": len(prompt_ids),
+        "context_len": context_len,
+        # generate() re-slices ids[-context_len:] on every step, silently. A
+        # long prompt plus a long generation therefore loses its own beginning
+        # partway through with no error and no signal, so say so. attention_grid
+        # below returns the same flag for the same reason.
+        "truncated": len(prompt_ids) + max_tokens > context_len,
+        "seconds": round(elapsed, 3),
+        "tokens_per_second": round(max_tokens / elapsed) if elapsed > 0 else 0,
+    }
 
 
 def attention_grid(

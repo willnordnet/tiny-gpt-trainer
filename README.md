@@ -348,6 +348,12 @@ learned nothing", a scrubber through the samples the trainer generates as it
 goes, a next-token distribution you can reshape live with the temperature /
 top-k / top-p sliders, an attention heatmap, and the raw log.
 
+There is also a **Generate** panel: type a prompt, get a continuation streamed
+back a token at a time from any checkpoint. It is a completion playground
+rather than a chat window, because that is what this model is -- a base LM
+trained to predict the next token, with no instruction tuning and no chat
+template. It continues a prefix; it does not answer questions.
+
 Nothing in `tinygpt/` imports it, and `pytest` passes without it. Training runs
 as a subprocess of the same `python -m tinygpt.train` command shown above, and
 the viewer just reads stdout — so the trainer cannot be broken by the viewer,

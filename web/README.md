@@ -43,7 +43,7 @@ silently emptying a chart.
 | `server.py` | routes, static files, and hand-rolled server-sent events |
 | `runner.py` | subprocess lifecycle for the four pipeline stages |
 | `logparse.py` | stdout lines to structured events — pure functions |
-| `introspect.py` | loads a checkpoint for the next-token and attention panels |
+| `introspect.py` | loads a checkpoint for the next-token, generate and attention panels |
 | `static/` | one HTML page, one stylesheet, one script. No build step. |
 
 Two of these run standalone, which is the fastest way to see what they do:
@@ -83,6 +83,22 @@ the very same `sample.reshape_logits` that `generate()` uses — a JavaScript
 reimplementation would be a second copy of the exact mechanics this project
 exists to explain, sitting where it could silently drift.
 
+**Generate.** Type a prompt, get a continuation, streamed token by token.
+Worth being blunt about what this is: a **completion playground, not a chat
+window**. The model is a base LM trained only to predict the next token in
+TinyShakespeare -- no instruction tuning, no chat template, and per
+`DESIGN.md` no special tokens at all. It continues a prefix in the style of
+its corpus; it cannot answer a question. A chat UI would imply a capability it
+does not have. The prompt is echoed dim and the continuation written bright,
+so the two read as one passage while it stays obvious where the model took
+over. Stop aborts the fetch, which is the whole mechanism -- the server's next
+write fails and generation unwinds.
+
+The readout shows the prompt's token count against the model's context length,
+because `generate()` re-slices `ids[-context_len:]` on every step in silence:
+a long prompt plus a long generation loses its own beginning partway through
+with no error. On `tiny` that limit is 256 tokens, a few hundred words.
+
 **Attention.** A layer/head grid over a prompt. The empty upper triangle is
 the causal mask. Cell shading is `sqrt(weight)`, for display only: attention
 is spiky, and on a linear ramp everything but the peak reads as black.
@@ -105,6 +121,10 @@ dashboard should never be the only way to see what happened.
   the newest thing they can show is the last checkpoint, not the current step.
   Lower `checkpoint_interval` in `tinygpt/config.py` for a finer-grained demo.
 - **No KV cache** (a deliberate choice, see `tinygpt/sample.py`), so generation
-  is `O(n²)`. Fine for short samples; keep lab prefixes short.
+  is `O(n²)`. Fine for short samples; keep lab prefixes short. Streaming makes
+  this visible rather than hiding it behind a spinner -- text visibly slows as
+  the sequence grows.
+- **Generation is not seeded.** Two identical requests give different text.
+  `python -m tinygpt.sample --seed N` is the reproducible path.
 - **One run at a time.** Two training processes on one GPU make both slower
   and the numbers meaningless to compare.

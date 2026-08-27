@@ -414,20 +414,29 @@ $("scrub").oninput = () => { state.scrubPinned = true; showSample(); };
 // Checkpoints, next-token lab, attention
 // ---------------------------------------------------------------------------
 
+// Every panel that picks a checkpoint is filled from one fetch, so a new
+// checkpoint written mid-run appears in all of them at once.
+const CHECKPOINT_SELECTS = ["labCkpt", "genCkpt"];
+
 async function loadCheckpoints() {
   const { checkpoints } = await fetch("/api/checkpoints").then((r) => r.json());
-  const select = $("labCkpt");
-  const previous = select.value;
-  select.replaceChildren();
-  for (const checkpoint of checkpoints) {
-    const option = document.createElement("option");
-    option.value = checkpoint.path;
-    const val = checkpoint.val_loss === null ? "" : ` · val ${checkpoint.val_loss.toFixed(3)}`;
-    option.textContent = `${checkpoint.preset} step ${checkpoint.step}${val}`;
-    select.appendChild(option);
+
+  for (const id of CHECKPOINT_SELECTS) {
+    const select = $(id);
+    const previous = select.value;
+    select.replaceChildren();
+    for (const checkpoint of checkpoints) {
+      const option = document.createElement("option");
+      option.value = checkpoint.path;
+      const val = checkpoint.val_loss === null ? "" : ` · val ${checkpoint.val_loss.toFixed(3)}`;
+      option.textContent = `${checkpoint.preset} step ${checkpoint.step}${val}`;
+      select.appendChild(option);
+    }
+    // Keep the user's choice across a reload if that checkpoint still exists.
+    if (previous && checkpoints.some((c) => c.path === previous)) select.value = previous;
   }
-  if (previous && checkpoints.some((c) => c.path === previous)) select.value = previous;
-  if (select.value) refreshLab();
+
+  if ($("labCkpt").value) refreshLab();
 }
 
 $("refreshCkpts").onclick = loadCheckpoints;
@@ -585,6 +594,130 @@ $("drawAttn").onclick = async () => {
     note.className = "hint";
     note.textContent = `Prompt truncated to its last ${data.tokens.length} tokens.`;
     wrap.appendChild(note);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Generation panel
+//
+// The server answers /api/generate with newline-delimited JSON rather than
+// server-sent events, because EventSource can only issue GET requests and the
+// prompt belongs in a body. So this reads the response as a stream and splits
+// it on newlines itself.
+// ---------------------------------------------------------------------------
+
+let genAbort = null;
+
+function syncGenLabels() {
+  $("genTempVal").textContent = Number($("genTemp").value).toFixed(2);
+  const topk = Number($("genTopk").value);
+  $("genTopkVal").textContent = topk === 0 ? "off" : String(topk);
+  $("genToppVal").textContent = Number($("genTopp").value).toFixed(2);
+}
+for (const id of ["genTemp", "genTopk", "genTopp"]) $(id).oninput = syncGenLabels;
+syncGenLabels();
+
+function setGenerating(active) {
+  $("genRun").disabled = active;
+  $("genStop").disabled = !active;
+}
+
+$("genStop").onclick = () => {
+  // Aborting the fetch is the whole stop mechanism. The server's next write
+  // raises BrokenPipeError inside the sink, which unwinds out of generate()
+  // and ends the loop -- so no stop endpoint is needed.
+  if (genAbort) genAbort.abort();
+};
+
+$("genRun").onclick = async () => {
+  const checkpoint = $("genCkpt").value;
+  if (!checkpoint) { showError("No checkpoint to generate from yet."); return; }
+  clearError();
+
+  const prompt = $("genPrompt").value;
+  const output = $("genOut");
+
+  // Echo the prompt dim, then stream the continuation bright after it, so the
+  // whole thing reads as one passage while it stays obvious where the model
+  // took over. The server sends only the continuation.
+  output.replaceChildren();
+  const echo = document.createElement("span");
+  echo.className = "echo";
+  echo.textContent = prompt;
+  const written = document.createElement("span");
+  const cursor = document.createElement("span");
+  cursor.className = "cursor";
+  cursor.textContent = " ";
+  output.append(echo, written, cursor);
+
+  $("genStats").textContent = "generating…";
+  setGenerating(true);
+  genAbort = new AbortController();
+
+  try {
+    const response = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: genAbort.signal,
+      body: JSON.stringify({
+        checkpoint,
+        prompt,
+        max_tokens: Number($("genMax").value),
+        temperature: Number($("genTemp").value),
+        top_k: Number($("genTopk").value),
+        top_p: Number($("genTopp").value),
+      }),
+    });
+
+    // An error is answered as a normal JSON body before any stream starts, so
+    // the page never has to guess about a half-written response.
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({}));
+      throw new Error(failure.error || response.statusText);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffered = "";
+
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+
+      // A chunk can split a line, so keep the unterminated tail for next time.
+      const lines = buffered.split("\n");
+      buffered = lines.pop();
+
+      for (const line of lines) {
+        if (!line) continue;
+        const event = JSON.parse(line);
+        if (event.delta !== undefined) {
+          written.textContent += event.delta;
+          output.scrollTop = output.scrollHeight;
+        } else if (event.done) {
+          $("genStats").textContent =
+            `step ${event.step} · prompt ${event.prompt_tokens} tokens · ` +
+            `context ${event.context_len} · ${event.tokens_per_second} tok/s · ` +
+            `${event.seconds}s` +
+            (event.truncated
+              ? ` · TRUNCATED: prompt + generation exceeds the ${event.context_len}-token ` +
+                `context, so the model lost the start of its own prompt partway through`
+              : "");
+        }
+      }
+    }
+  } catch (error) {
+    if (error.name === "AbortError") {
+      $("genStats").textContent = "stopped";
+    } else {
+      $("genStats").textContent = "—";
+      showError(String(error.message || error));
+    }
+  } finally {
+    cursor.remove();
+    setGenerating(false);
+    genAbort = null;
   }
 };
 

@@ -173,3 +173,95 @@ def test_an_out_of_range_layer_or_head_is_clamped_not_crashed(
     )
     assert grid["layer"] == tiny_cfg.n_layers - 1
     assert grid["head"] == tiny_cfg.n_heads - 1
+
+
+# --- generation ------------------------------------------------------------
+
+
+def test_generate_completion_streams_exactly_the_continuation(
+    tiny_cfg, matching_tokenizer, tmp_path, monkeypatch
+):
+    """The sink must receive the continuation and nothing else: the page has
+    the prompt on screen already, and echoing it back would render it twice."""
+    monkeypatch.setattr(introspect, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(introspect, "load_tokenizer", lambda _: matching_tokenizer)
+    introspect._model_cache.clear()
+
+    out = tmp_path / "checkpoints"
+    out.mkdir()
+    save_checkpoint(out / "t-step5.safetensors", TinyGPT(tiny_cfg), "tiny", 5, 1.0)
+
+    deltas: list[str] = []
+    result = introspect.generate_completion(
+        "checkpoints/t-step5.safetensors", "the", max_tokens=12,
+        temperature=0.0, on_text=deltas.append,
+    )
+
+    # The robust statement of "the sink never echoes the prompt": what the sink
+    # received is exactly what generate_text appended to it. A prefix check
+    # would be fragile -- a greedy untrained model happily emits the prompt's
+    # own words back as its first continuation.
+    assert "".join(deltas) == result["continuation"]
+    assert result["step"] == 5
+    assert result["prompt_tokens"] == len(matching_tokenizer.encode("the"))
+    assert result["context_len"] == tiny_cfg.context_len
+
+
+def test_generate_completion_works_without_a_sink(
+    tiny_cfg, matching_tokenizer, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(introspect, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(introspect, "load_tokenizer", lambda _: matching_tokenizer)
+    introspect._model_cache.clear()
+
+    out = tmp_path / "checkpoints"
+    out.mkdir()
+    save_checkpoint(out / "t-step5.safetensors", TinyGPT(tiny_cfg), "tiny", 5, 1.0)
+
+    result = introspect.generate_completion(
+        "checkpoints/t-step5.safetensors", "the", max_tokens=6, temperature=0.0
+    )
+    assert result["continuation"]
+
+
+def test_generate_completion_flags_a_prompt_that_will_overflow_the_context(
+    tiny_cfg, matching_tokenizer, tmp_path, monkeypatch
+):
+    """generate() re-slices ids[-context_len:] every step with no signal, so a
+    long prompt loses its own beginning partway through. Say so rather than
+    letting it happen quietly."""
+    monkeypatch.setattr(introspect, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(introspect, "load_tokenizer", lambda _: matching_tokenizer)
+    introspect._model_cache.clear()
+
+    out = tmp_path / "checkpoints"
+    out.mkdir()
+    save_checkpoint(out / "t-step5.safetensors", TinyGPT(tiny_cfg), "tiny", 5, 1.0)
+
+    short = introspect.generate_completion(
+        "checkpoints/t-step5.safetensors", "the", max_tokens=4, temperature=0.0
+    )
+    assert short["truncated"] is False
+
+    long_prompt = "the " * tiny_cfg.context_len
+    overflowing = introspect.generate_completion(
+        "checkpoints/t-step5.safetensors", long_prompt, max_tokens=4, temperature=0.0
+    )
+    assert overflowing["truncated"] is True
+
+
+def test_generate_completion_refuses_a_mismatched_vocabulary(
+    tiny_cfg, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(introspect, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        introspect, "load_tokenizer", lambda _: BPETokenizer(merges=[(116, 104)])
+    )
+    introspect._model_cache.clear()
+
+    out = tmp_path / "checkpoints"
+    out.mkdir()
+    save_checkpoint(out / "t-step5.safetensors", TinyGPT(tiny_cfg), "tiny", 5, 1.0)
+
+    with pytest.raises(introspect.VocabMismatch):
+        introspect.generate_completion("checkpoints/t-step5.safetensors", "the")
