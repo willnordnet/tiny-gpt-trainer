@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tiny-GPT-trainer</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>tiny-GPT-trainer <span>&mdash; watching a run</span></h1>
+  <p>Local viewer. Shells out to <code>python -m tinygpt.train</code> and reads its stdout; the trainer itself does not know this page exists.</p>
+</header>
+
+<div class="grid">
+
+  <!-- 1. run controls -->
+  <section class="panel">
+    <h2>Run</h2>
+    <p class="hint">Leave the corpus empty to train on whatever is already prepared in <code>data/tokens</code>. Uploading a .txt re-runs the pipeline from that file.</p>
+
+    <div class="row">
+      <div class="field">
+        <label for="preset">preset</label>
+        <select id="preset">
+          <option value="tiny">tiny &middot; 5.87M</option>
+          <option value="small">small &middot; 27.80M</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="steps">steps</label>
+        <input type="number" id="steps" value="400" min="1" max="100000" style="width:90px">
+      </div>
+      <div class="field" style="flex:1; min-width:160px">
+        <label for="prompt">sample prompt</label>
+        <input type="text" id="prompt" value="ROMEO:">
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <div class="field" style="flex:1; min-width:200px">
+        <label for="file">corpus (.txt, max 2 MB)</label>
+        <input type="file" id="file" accept=".txt,text/plain">
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <label class="checkline"><input type="checkbox" id="gate" checked> run the overfit gate first</label>
+      <label class="checkline"><input type="checkbox" id="newTokenizer"> train a new BPE vocab on the upload</label>
+    </div>
+
+    <div class="row" style="margin-top:14px">
+      <button id="start" class="primary">Start</button>
+      <button id="stop" class="danger" disabled>Stop</button>
+    </div>
+
+    <div class="badges">
+      <span class="badge" id="badgeState">idle</span>
+      <span class="badge" id="badgeStage">&mdash;</span>
+      <span class="badge" id="badgeGate">gate: not run</span>
+      <span class="badge" id="badgeSource">corpus: existing tokens</span>
+    </div>
+
+    <div class="err-banner hidden" id="error"></div>
+  </section>
+
+  <!-- 2. loss -->
+  <section class="panel">
+    <h2>Loss</h2>
+    <p class="hint">The dashed line is <code>ln(vocab_size)</code>: the loss of a model that has learned nothing. Everything below it is real learning. When the orange line turns back up while the blue keeps falling, the model has started memorising instead of generalising.</p>
+
+    <div class="readout">
+      <div><span class="k">step</span><span class="v" id="rStep">&mdash;</span></div>
+      <div><span class="k">train</span><span class="v train" id="rTrain">&mdash;</span></div>
+      <div><span class="k">val</span><span class="v val" id="rVal">&mdash;</span></div>
+      <div><span class="k">tok/s</span><span class="v" id="rToks">&mdash;</span></div>
+    </div>
+
+    <div class="chart-wrap"><svg id="lossChart" viewBox="0 0 560 240" preserveAspectRatio="none"></svg></div>
+    <div class="legend">
+      <span><i style="background:var(--train)"></i>train</span>
+      <span><i style="background:var(--val)"></i>val</span>
+      <span><i style="background:var(--baseline)"></i>ln(vocab) &mdash; learned nothing</span>
+      <span id="overfitNote" style="color:var(--bad)"></span>
+    </div>
+
+    <div class="sparks">
+      <div class="spark"><h3>learning rate</h3><svg id="lrChart" viewBox="0 0 180 56"></svg></div>
+      <div class="spark"><h3>grad norm</h3><svg id="gnChart" viewBox="0 0 180 56"></svg></div>
+      <div class="spark"><h3>tokens/sec</h3><svg id="tsChart" viewBox="0 0 180 56"></svg></div>
+    </div>
+  </section>
+
+  <!-- 3. sample timeline -->
+  <section class="panel">
+    <h2>Sample timeline</h2>
+    <p class="hint">The trainer generates from the same prompt every <code>sample_interval</code> steps. Drag to watch the model go from noise to words to something with the shape of dialogue.</p>
+    <input type="range" id="scrub" min="0" max="0" value="0" disabled>
+    <div class="readout">
+      <div><span class="k">at step</span><span class="v" id="sampleStep">&mdash;</span></div>
+      <div><span class="k">of</span><span class="v" id="sampleCount">0 samples</span></div>
+    </div>
+    <div class="sample-text" id="sampleText">No samples yet. They start arriving once the run passes its first sample interval.</div>
+  </section>
+
+  <!-- 4. probability lab -->
+  <section class="panel">
+    <h2>Next-token lab</h2>
+    <p class="hint">One forward pass, one distribution. The pale bar is what the model actually predicted; the solid bar is what survives temperature, top-k and top-p. Struck-out rows are candidates the knobs eliminated outright.</p>
+
+    <div class="row">
+      <div class="field" style="flex:1; min-width:150px">
+        <label for="labCkpt">checkpoint</label>
+        <select id="labCkpt"></select>
+      </div>
+      <button id="refreshCkpts">Reload</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div class="field" style="flex:1">
+        <label for="labPrompt">prefix</label>
+        <input type="text" id="labPrompt" value="ROMEO:">
+      </div>
+      <button id="commit">Commit top token &rarr;</button>
+    </div>
+
+    <div class="sliders">
+      <div>
+        <div class="slider-label"><span>temperature</span><b id="tempVal">0.80</b></div>
+        <input type="range" id="temp" min="0" max="2" step="0.05" value="0.8">
+      </div>
+      <div>
+        <div class="slider-label"><span>top-k</span><b id="topkVal">off</b></div>
+        <input type="range" id="topk" min="0" max="100" step="1" value="0">
+      </div>
+      <div>
+        <div class="slider-label"><span>top-p</span><b id="toppVal">1.00</b></div>
+        <input type="range" id="topp" min="0.05" max="1" step="0.01" value="1">
+      </div>
+    </div>
+
+    <div class="readout" style="margin-top:12px">
+      <div><span class="k">entropy (nats)</span><span class="v" id="entropy">&mdash;</span></div>
+      <div><span class="k">raw</span><span class="v" id="entropyRaw">&mdash;</span></div>
+      <div><span class="k">uniform</span><span class="v" id="entropyUniform">&mdash;</span></div>
+    </div>
+    <p class="hint" style="margin-top:4px">Entropy is in nats, the same units as the loss chart: it is the loss the model would take if its own guess turned out to be right.</p>
+
+    <div class="bars" id="bars"></div>
+  </section>
+
+  <!-- 5. attention -->
+  <section class="panel wide">
+    <h2>Attention</h2>
+    <p class="hint">Row <em>i</em> is what token <em>i</em> attended to. The empty upper triangle is the causal mask: a token can never see the future, which is the property that makes next-token training honest.</p>
+
+    <div class="row">
+      <div class="field" style="flex:1; min-width:150px">
+        <label for="attnPrompt">prompt</label>
+        <input type="text" id="attnPrompt" value="To be or not to be, that is the question">
+      </div>
+      <div class="field"><label for="attnLayer">layer</label><select id="attnLayer" style="width:80px"></select></div>
+      <div class="field"><label for="attnHead">head</label><select id="attnHead" style="width:80px"></select></div>
+      <button id="drawAttn">Draw</button>
+    </div>
+    <div class="attn-wrap" id="attnWrap"><p class="hint">Pick a checkpoint in the lab above, then press Draw.</p></div>
+  </section>
+
+  <!-- 6. raw log -->
+  <section class="panel wide">
+    <h2>Raw log</h2>
+    <p class="hint">Every line the child processes printed, parsed or not. The dashboard should never be the only way to see what happened.</p>
+    <div class="log" id="log"></div>
+  </section>
+
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

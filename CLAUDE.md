@@ -87,6 +87,24 @@ and demonstrable on its own, not only as part of the full pipeline:
 The goal: someone should be able to read and run any one file in isolation
 to understand what it does, without having to run the entire pipeline first.
 
+## The `web/` viewer
+
+`web/` is an optional viewer, not part of the pipeline (`DESIGN.md` §9). Two
+rules keep it that way:
+
+- **The dependency runs one way.** `tinygpt/` must never import from `web/`.
+  If something in the viewer seems to need a change inside the training loop,
+  that is a signal to parse more of the trainer's existing output, not to wire
+  a callback into `train.py`.
+- **It talks to the trainer through subprocesses and stdout.** That coupling
+  is to the *log format*, so any change to a logged line in `train.py` or
+  `train_tokenizer.py` means updating `web/logparse.py` and its test. Run
+  `pytest tests/test_logparse.py` after touching a format string.
+
+`web/logparse.py`, `web/runner.py` and `web/introspect.py` each have a
+`__main__` demo; use them rather than starting the server when checking a
+change to one of those files.
+
 ## Scope discipline
 
 - **Do not** add a second adapter, multi-domain support, or domain-tag

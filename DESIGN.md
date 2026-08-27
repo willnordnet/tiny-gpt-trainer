@@ -236,7 +236,9 @@ judge, ideally with the same log output described in `CLAUDE.md`.
 - **Loss curve shape.** On a real (if small) dataset, loss should decrease
   and roughly plateau, not spike, NaN, or plateau immediately at a high
   value. Log this every run; a quick plot from the log file is enough,
-  no dashboard needed.
+  and the core pipeline needs no dashboard to be correct. The optional
+  viewer in `web/` (§9) renders that same log live for demos, but nothing
+  here depends on it.
 - **Sample generations at checkpoints.** Per `CLAUDE.md`'s logging
   requirements, generate a short sample every N steps during training and
   read them. Early samples should look like noise; later samples should
@@ -302,3 +304,53 @@ not accumulating features.
   The goal is understanding the mechanism, not competing with real LLMs.
 - **Not** optimizing training speed or scaling to larger data than fits
   comfortably in memory on one machine.
+
+## 9. The optional viewer in `web/`
+
+Not part of the pipeline. `tinygpt/` never imports it, `pytest` passes without
+it, and every step in §4 runs from the command line exactly as before. It
+exists because a training run is worth *watching*, and a scrolling log hides
+the two things most worth seeing: the shape of the loss curve, and the arc
+where a generated sample stops being noise.
+
+**The boundary is a subprocess.** `web/server.py` shells out to the same
+`python -m tinygpt.*` commands a person would type and parses their stdout:
+
+```
+browser ──POST /api/run──> server.py ──spawn──> python -u -m tinygpt.train
+        <──SSE /api/events──          <─stdout─  "step 120/2000 loss 4.71 ..."
+                                       logparse.py: line -> {step, loss, lr, ...}
+```
+
+That boundary was chosen over importing `train()` into the server process for
+three reasons. `train.py` needs no changes and cannot be broken by the viewer.
+A run that crashes or exhausts memory takes down a child, not the server, so
+the page survives to show what happened. And stopping a run means killing a
+process, which is reliable in a way that asking a tight MLX loop to please
+stop is not.
+
+The cost, stated plainly: the viewer is coupled to the trainer's **log
+format**. `tests/test_logparse.py` exists to make that coupling safe — it
+feeds the parser real lines from `logs/`, so a changed format string breaks a
+millisecond-long unit test instead of silently emptying a chart.
+
+**The one thing this needed from the core.** `TinyGPT.__call__` takes an
+optional `attention_out` list and fills it with the per-layer attention
+weights. Defaulted to `None`, so training and sampling are unchanged, and free
+at runtime because those weights are already materialised. The alternative was
+recomputing q/k, RoPE and the softmax inside `web/` — a second attention
+implementation obliged to stay numerically identical to the first, which is
+the same cost `generate()` declines to pay for a KV cache (§3.5).
+
+**Dependencies: none.** The server is stdlib `http.server` with server-sent
+events written out by hand, and the charts are hand-drawn SVG with no
+framework and no build step. Consistent with the rest of the project, where
+the interesting machinery is meant to be readable rather than imported.
+
+Panels, and what each is for, are documented in `web/README.md`. Two are worth
+naming here because they teach something the CLI cannot show as directly: the
+loss chart draws `ln(vocab_size)` as a reference line and marks where
+validation loss turns back up (§6.3 records that this run overfits hard), and
+the next-token lab reshapes a real distribution live under the temperature /
+top-k / top-p sliders, calling the same `reshape_logits` that `generate()`
+uses rather than a copy in JavaScript.

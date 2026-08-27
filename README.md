@@ -23,6 +23,8 @@ Stated up front so it is not discovered by disappointment later:
 - **Not** optimized for training speed, or for data larger than fits
   comfortably in memory on one machine.
 - **Not** a serving or deployment project. There is no inference server.
+  (`web/` is a local viewer for watching your own training run, bound to
+  127.0.0.1 with no auth — a teaching tool, not a deployment path.)
 - **Not** multi-domain. There is exactly one data adapter (plain text) on
   purpose. See `DESIGN.md` §7 for why the scope is deliberately this small.
 
@@ -328,6 +330,30 @@ A TORN distribution (no clear winner), same settings
     top_p=0.90 kept 3 tokens when confident, 6 when torn.  It follows the shape.
 ```
 
+## Watching a run in the browser
+
+The four steps above are the project. This is an optional way to watch step 3
+happen, added because a scrolling log hides the two things most worth seeing:
+the shape of the loss curve, and the arc where a generated sample stops being
+noise.
+
+```bash
+python -m web.server --port 8000
+# open http://127.0.0.1:8000
+```
+
+Pick a preset, set a step count, optionally upload a `.txt`, press Start. The
+page shows the loss curve against the `ln(vocab_size)` line that marks "has
+learned nothing", a scrubber through the samples the trainer generates as it
+goes, a next-token distribution you can reshape live with the temperature /
+top-k / top-p sliders, an attention heatmap, and the raw log.
+
+Nothing in `tinygpt/` imports it, and `pytest` passes without it. Training runs
+as a subprocess of the same `python -m tinygpt.train` command shown above, and
+the viewer just reads stdout — so the trainer cannot be broken by the viewer,
+and a crashed run leaves the page up to show you what happened. `web/README.md`
+covers the panels; `DESIGN.md` §9 covers why the boundary is drawn there.
+
 ## What a real run looks like
 
 Everything below is from one 2000-step `tiny` run on TinyShakespeare, about
@@ -509,6 +535,9 @@ python -m tinygpt.tokenizer.tokenizer      # trains a tiny vocab, shows a round 
 python -m tinygpt.model                    # guided tour of RMSNorm/RoPE/SwiGLU/causality
 python -m tinygpt.config                   # parameter count breakdown per preset
 python -m tinygpt.sample                   # temperature/top-k/top-p demo, no model needed
+
+python -m web.logparse logs/<a-run>.log    # replay a real log through the parser
+python -m web.introspect                   # next-token + attention, newest checkpoint
 ```
 
 `python -m tinygpt.model` is worth running before anything else. It does not just prove
@@ -580,6 +609,12 @@ tiny-gpt-trainer/
 │   ├── train.py                 # training loop, checkpoints, logging
 │   ├── sample.py                # temperature / top-k / top-p generation
 │   └── config.py                # model + training size presets
+├── web/                         # optional live viewer (DESIGN.md §9)
+│   ├── server.py                # stdlib http.server + server-sent events
+│   ├── runner.py                # runs the pipeline as subprocesses
+│   ├── logparse.py              # trainer stdout -> structured events
+│   ├── introspect.py            # checkpoint -> distributions, attention
+│   └── static/                  # one page, no build step
 ├── data/                        # data only, no code
 │   ├── raw/                     # downloaded corpora (gitignored)
 │   └── tokens/                  # train.npy / val.npy (gitignored)
@@ -611,6 +646,7 @@ one commit. Current state:
 - [x] Step 6: `train.py`
 - [x] Step 7: `sample.py`
 - [x] Step 8: first real run, honest samples pasted here
+- [x] Step 9: `tinygpt/` package, `web/` viewer (optional, `DESIGN.md` §9)
 
 Commands documented above describe the target pipeline. Anything not ticked
 off does not exist yet.
