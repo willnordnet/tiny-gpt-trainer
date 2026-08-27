@@ -202,9 +202,26 @@ can understand one file without running the whole pipeline:
 ```bash
 python -m adapters.plain_text      # chunking, on an inline sample string
 python -m tokenizer.tokenizer      # trains a tiny vocab, shows a round trip
-python model.py                    # builds an untrained model, one forward pass
+python model.py                    # guided tour of RMSNorm/RoPE/SwiGLU/causality
 python config.py                   # parameter count breakdown per preset
 ```
+
+`python model.py` is worth running before anything else. It does not just prove
+the architecture is wired correctly, it demonstrates each of the four ideas that
+make this a modern transformer rather than a 2019 one, numerically:
+
+- **RMSNorm** normalising vectors from RMS 123 down to RMS 1.0, and eps visibly
+  taking over when the input is near zero
+- **RoPE** giving byte-for-byte identical attention scores for the same content
+  at positions (2,0), (7,5), (11,9) and (15,13), because all four are an offset
+  of 2 apart, and different scores once the offset changes
+- **SwiGLU**'s gate closing a unit to ~0 or opening it linearly, per input
+- **Causal masking**, by editing the last token of a sequence and showing the
+  logit change at every earlier position is exactly `0.000000`
+
+It closes by counting the built model's parameters and checking that number
+against `config.py`'s independent hand-derived arithmetic (both say 5,868,800
+for `tiny`), and by confirming the untrained loss lands near `ln(4096) = 8.318`.
 
 And the fast tests, which do no real training and finish in seconds:
 
@@ -274,7 +291,7 @@ one commit. Current state:
 - [x] Step 2: `adapters/`
 - [x] Step 3: `tokenizer/`
 - [x] Step 4: `data/prepare.py`
-- [ ] Step 5: `model.py`
+- [x] Step 5: `model.py`
 - [ ] Step 6: `train.py`
 - [ ] Step 7: `sample.py`
 - [ ] Step 8: first real run, honest samples pasted here
