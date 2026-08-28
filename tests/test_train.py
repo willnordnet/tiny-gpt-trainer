@@ -353,3 +353,47 @@ def test_vocab_size_override_resizes_the_embedding_table():
     model = TinyGPT(resized)
     logits = model(mx.array([[0, 1, 2]]))
     assert logits.shape == (1, 3, 372)
+
+
+# --- the vocabulary a checkpoint carries -----------------------------------
+
+
+def test_a_checkpoint_round_trips_the_vocabulary_it_was_trained_with(tmp_path):
+    """The checkpoint is meant to be self-contained: weights, config *and* the
+    codebook its token ids refer to. Without this, reading it needs a vocab.json
+    that nothing guarantees is the right one."""
+    from tinygpt.tokenizer.tokenizer import BPETokenizer
+    from tinygpt.train import save_checkpoint, tokenizer_from_checkpoint
+
+    tokenizer = BPETokenizer(merges=[(116, 104), (256, 101), (97, 98)])
+    cfg = ModelConfig(vocab_size=tokenizer.vocab_size, n_layers=1, d_model=32,
+                      n_heads=4, context_len=8)
+    path = tmp_path / "t-step1.safetensors"
+    save_checkpoint(path, TinyGPT(cfg), "tiny", 1, 1.0, tokenizer=tokenizer)
+
+    _, metadata = mx.load(str(path), return_metadata=True)
+    restored = tokenizer_from_checkpoint(metadata)
+
+    assert restored is not None
+    assert restored.merges == tokenizer.merges
+    assert restored.fingerprint == tokenizer.fingerprint
+    # The fingerprint is recorded separately as the cheap identity check, and
+    # the two must agree or the guard is comparing against the wrong thing.
+    assert metadata["tokenizer_fingerprint"] == tokenizer.fingerprint
+
+    # Round-trips through real text, not just through the merge list.
+    assert restored.decode(restored.encode("the ab")) == "the ab"
+
+
+def test_a_checkpoint_saved_without_a_tokenizer_reports_none(tmp_path):
+    """vocab.json can be missing at training time (sample previews are
+    optional). That must produce "no vocabulary recorded", not a broken one."""
+    from tinygpt.train import save_checkpoint, tokenizer_from_checkpoint
+
+    cfg = ModelConfig(vocab_size=258, n_layers=1, d_model=32, n_heads=4, context_len=8)
+    path = tmp_path / "t-step1.safetensors"
+    save_checkpoint(path, TinyGPT(cfg), "tiny", 1, None)
+
+    _, metadata = mx.load(str(path), return_metadata=True)
+    assert metadata["tokenizer"] == ""
+    assert tokenizer_from_checkpoint(metadata) is None

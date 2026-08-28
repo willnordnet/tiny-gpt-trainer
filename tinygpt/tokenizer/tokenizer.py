@@ -157,10 +157,18 @@ class BPETokenizer:
         raw = b"".join(self.vocab[i] for i in ids)
         return raw.decode("utf-8", errors="replace")
 
-    def save(self, path: str | Path) -> None:
-        """Write the merge list and metadata to a JSON file."""
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def to_json(self, indent: int | None = 2) -> str:
+        """The vocabulary's serialised form, as a JSON string.
+
+        Split out from save() because a vocabulary now travels in two places:
+        vocab.json on disk, and a copy inside every checkpoint written after it
+        (train.py: save_checkpoint). One definition of the format means the two
+        cannot drift, and from_json below reads either.
+
+        indent=None gives the compact form used inside a checkpoint, where the
+        payload is a metadata string nobody reads by eye -- about 39 KB against
+        131 KB pretty-printed, for a 4096-token vocabulary.
+        """
         payload = {
             "pretokenizer": PRETOKENIZER_NAME,
             "vocab_size": self.vocab_size,
@@ -170,21 +178,22 @@ class BPETokenizer:
             # thing that can be inconsistent with itself.
             "merges": [list(pair) for pair in self.merges],
         }
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        print(
-            f"[tokenizer] saved {path} "
-            f"(vocab_size={self.vocab_size}, fingerprint={self.fingerprint})"
-        )
+        separators = None if indent is not None else (",", ":")
+        return json.dumps(payload, indent=indent, separators=separators)
 
     @classmethod
-    def load(cls, path: str | Path) -> "BPETokenizer":
-        """Read a tokenizer back from a JSON file written by `save`."""
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    def from_json(cls, text: str, source: str = "<json>") -> "BPETokenizer":
+        """Rebuild a tokenizer from the form to_json writes.
+
+        `source` names where the JSON came from, so an error can point at the
+        offending file or checkpoint instead of at nothing in particular.
+        """
+        payload = json.loads(text)
 
         saved_pretokenizer = payload.get("pretokenizer")
         if saved_pretokenizer != PRETOKENIZER_NAME:
             raise ValueError(
-                f"{path} was built with pretokenizer "
+                f"{source} was built with pretokenizer "
                 f"{saved_pretokenizer!r}, but this code uses "
                 f"{PRETOKENIZER_NAME!r}; the same text would encode "
                 "differently, so this vocabulary must be retrained"
@@ -197,10 +206,27 @@ class BPETokenizer:
         # than as a mysterious out-of-range token id during training.
         if tokenizer.vocab_size != payload["vocab_size"]:
             raise ValueError(
-                f"{path} claims vocab_size={payload['vocab_size']} but its "
+                f"{source} claims vocab_size={payload['vocab_size']} but its "
                 f"merge list reconstructs to {tokenizer.vocab_size}"
             )
+        return tokenizer
 
+    def save(self, path: str | Path) -> None:
+        """Write the merge list and metadata to a JSON file."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.to_json(), encoding="utf-8")
+        print(
+            f"[tokenizer] saved {path} "
+            f"(vocab_size={self.vocab_size}, fingerprint={self.fingerprint})"
+        )
+
+    @classmethod
+    def load(cls, path: str | Path) -> "BPETokenizer":
+        """Read a tokenizer back from a JSON file written by `save`."""
+        tokenizer = cls.from_json(
+            Path(path).read_text(encoding="utf-8"), source=str(path)
+        )
         print(
             f"[tokenizer] loaded {path} "
             f"(vocab_size={tokenizer.vocab_size}, "

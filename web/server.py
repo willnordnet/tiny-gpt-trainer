@@ -268,14 +268,27 @@ class Handler(BaseHTTPRequestHandler):
 
     def _status(self) -> dict:
         job = REGISTRY.current
+        # max_upload_bytes travels with the status so the page can refuse an
+        # oversized file before sending it, rather than duplicating the number
+        # in JavaScript and letting the two drift.
         if job is None:
-            return {"running": False, "stages": []}
+            return {"running": False, "stages": [],
+                    "max_upload_bytes": MAX_UPLOAD_BYTES}
         return {
             "running": job.running,
             "stages": [stage.name for stage in job.stages],
             "started_at": job.started_at,
             "events": len(job.snapshot()),
+            "max_upload_bytes": MAX_UPLOAD_BYTES,
         }
+
+    def _drain(self, remaining: int) -> None:
+        """Read and discard a request body, in constant memory."""
+        while remaining > 0:
+            chunk = self.rfile.read(min(64 * 1024, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
 
     def _upload(self) -> dict:
         """Store an uploaded corpus under data/raw/.
@@ -288,6 +301,15 @@ class Handler(BaseHTTPRequestHandler):
         if length == 0:
             raise ValueError("empty upload")
         if length > MAX_UPLOAD_BYTES:
+            # Drain before answering. A client that is still writing its body
+            # when the response arrives gets a connection reset instead of the
+            # response, so refusing early without draining means the caller
+            # sees a generic network error rather than the sentence below --
+            # which is the one thing that would have told them what to do.
+            # Discarded in chunks, so the memory this limit protects is never
+            # allocated, and bounded so an absurd upload cannot hold the
+            # handler open indefinitely.
+            self._drain(min(length, MAX_UPLOAD_BYTES))
             raise ValueError(
                 f"{length:,} bytes exceeds the {MAX_UPLOAD_BYTES:,} byte limit. "
                 "The limit is memory, not time: the upload is read into memory "
@@ -351,7 +373,9 @@ class Handler(BaseHTTPRequestHandler):
         # a vocabulary mismatch is still a clean 500 with a JSON error rather
         # than a half-written stream the page has to guess about.
         model, metadata = introspect._load(checkpoint)
-        introspect._checked_tokenizer(model, metadata, checkpoint, "vocab.json")
+        # None, not "vocab.json": let the checkpoint's own embedded vocabulary
+        # win where it has one. introspect._resolve_tokenizer owns that order.
+        introspect._checked_tokenizer(model, metadata, checkpoint, None)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")

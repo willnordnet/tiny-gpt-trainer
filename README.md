@@ -451,6 +451,25 @@ python -m tinygpt.train --preset tiny --data data/tokens --out checkpoints/ --st
 The honest fixes for the underlying problem are more data, a smaller model, or
 regularisation. Not a different learning rate.
 
+### Picking a checkpoint to sample from
+
+A checkpoint is self-contained: weights, the `ModelConfig` that shapes them, and
+the BPE merge list its token ids refer to, all inside the one `.safetensors`
+file. So sampling needs nothing on the side --
+
+```bash
+python -m tinygpt.sample --checkpoint checkpoints/tiny-step400.safetensors --prompt "ROMEO:"
+```
+
+works even with no `vocab.json` in the directory, and keeps working if you copy
+the file to another machine. Pass `--vocab` only to override that deliberately;
+a vocabulary that disagrees with the one the checkpoint records is refused
+rather than used, because the ids would decode into fluent-looking nonsense
+instead of erroring.
+
+Which checkpoint? The one with the lowest **val** loss, which the table above
+shows is usually not the last one written.
+
 ### Training on your own text
 
 The presets fix `vocab_size` at 4096 because that is what this repo's

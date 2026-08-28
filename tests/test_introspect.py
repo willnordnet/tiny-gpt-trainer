@@ -176,6 +176,59 @@ def test_list_checkpoints_reads_step_and_val_loss_from_metadata(
     assert all(entry["preset"] == "tiny" for entry in found)
 
 
+def test_an_embedded_vocabulary_is_used_in_preference_to_vocab_json(
+    tiny_cfg, matching_tokenizer, same_size_different_vocab, tmp_path, monkeypatch
+):
+    """The point of embedding: a checkpoint decodes correctly on its own, even
+    when the vocab.json sitting next to it is a different vocabulary of the
+    same size."""
+    monkeypatch.setattr(introspect, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(introspect, "load_tokenizer", lambda _: same_size_different_vocab)
+
+    path = tmp_path / "t-step1.safetensors"
+    save_checkpoint(path, TinyGPT(tiny_cfg), "tiny", 1, 1.5, tokenizer=matching_tokenizer)
+    _, metadata = mx.load(str(path), return_metadata=True)
+
+    resolved = introspect._resolve_tokenizer(metadata, None)
+    assert resolved.merges == matching_tokenizer.merges
+
+
+def test_an_explicit_vocab_path_still_wins_over_the_embedded_one(
+    tiny_cfg, matching_tokenizer, same_size_different_vocab, tmp_path, monkeypatch
+):
+    """Naming a vocabulary is an instruction. Silently overriding it would make
+    "read this checkpoint against that vocab" impossible to ask for -- and that
+    is the one way to read a checkpoint whose embedded copy is wrong."""
+    monkeypatch.setattr(introspect, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(introspect, "load_tokenizer", lambda _: same_size_different_vocab)
+
+    path = tmp_path / "t-step1.safetensors"
+    save_checkpoint(path, TinyGPT(tiny_cfg), "tiny", 1, 1.5, tokenizer=matching_tokenizer)
+    _, metadata = mx.load(str(path), return_metadata=True)
+
+    resolved = introspect._resolve_tokenizer(metadata, "somewhere/else.json")
+    assert resolved.merges == same_size_different_vocab.merges
+
+
+def test_a_checkpoint_carrying_its_own_vocabulary_needs_no_vocab_json(
+    tiny_cfg, matching_tokenizer, tmp_path, monkeypatch
+):
+    """sample.py and the panels must work from the checkpoint alone, which is
+    the whole reason for paying the 39 KB."""
+    monkeypatch.setattr(introspect, "REPO_ROOT", tmp_path)
+
+    def no_vocab_file(_):
+        raise FileNotFoundError("vocab.json")
+
+    monkeypatch.setattr(introspect, "load_tokenizer", no_vocab_file)
+
+    path = tmp_path / "t-step1.safetensors"
+    save_checkpoint(path, TinyGPT(tiny_cfg), "tiny", 1, 1.5, tokenizer=matching_tokenizer)
+    _, metadata = mx.load(str(path), return_metadata=True)
+
+    assert introspect._resolve_tokenizer(metadata, None).merges == matching_tokenizer.merges
+
+
 def test_list_checkpoints_flags_a_checkpoint_from_another_vocabulary(
     tiny_cfg, matching_tokenizer, same_size_different_vocab, tmp_path, monkeypatch
 ):

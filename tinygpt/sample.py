@@ -494,7 +494,12 @@ def main() -> None:
         default=None,
         help="a .safetensors checkpoint; omit to run the no-model knob demo",
     )
-    parser.add_argument("--vocab", default="vocab.json", help="tokenizer used for training")
+    parser.add_argument(
+        "--vocab",
+        default=None,
+        help="tokenizer to decode with; defaults to the one inside the "
+             "checkpoint, then vocab.json",
+    )
     parser.add_argument("--prompt", default="ROMEO:", help="text to continue")
     parser.add_argument("--max-tokens", type=int, default=200)
     parser.add_argument(
@@ -533,11 +538,30 @@ def main() -> None:
     # checkpoint off disk. Keeping the import local says that out loud, and it
     # also breaks what would otherwise be an import cycle, since train.py calls
     # generate_text() for its mid-run previews.
-    from tinygpt.train import load_checkpoint
+    from tinygpt.train import load_checkpoint, tokenizer_from_checkpoint
 
     checkpoint = Path(args.checkpoint)
     model, metadata = load_checkpoint(checkpoint)
-    tokenizer = BPETokenizer.load(args.vocab)
+
+    # Resolution order, strongest claim first: --vocab if given, because asking
+    # for a specific vocabulary is an instruction; then the copy the checkpoint
+    # carries, which is self-contained and correct by construction; then
+    # vocab.json, for checkpoints written before vocabularies travelled inside.
+    if args.vocab is not None:
+        tokenizer = BPETokenizer.load(args.vocab)
+        vocab_source = args.vocab
+    else:
+        tokenizer = tokenizer_from_checkpoint(metadata)
+        if tokenizer is not None:
+            vocab_source = "embedded in the checkpoint"
+            print(
+                f"[tokenizer] using the vocabulary inside {checkpoint} "
+                f"(vocab_size={tokenizer.vocab_size}, "
+                f"fingerprint={tokenizer.fingerprint})"
+            )
+        else:
+            tokenizer = BPETokenizer.load("vocab.json")
+            vocab_source = "vocab.json"
 
     # A checkpoint knows the vocab size it was trained with; the tokenizer knows
     # the vocab size it produces. If they disagree, every token id means
@@ -548,6 +572,17 @@ def main() -> None:
             f"tokenizer has vocab_size={tokenizer.vocab_size} but the "
             f"checkpoint was trained with vocab_size={model.cfg.vocab_size}; "
             "these are not the same vocabulary"
+        )
+
+    # The fingerprint is the strong check the size cannot make: two 4096-token
+    # vocabularies trained on different corpora pass the test above and still
+    # decode every id into different text.
+    recorded = (metadata.get("tokenizer_fingerprint") or "").strip()
+    if recorded and recorded != tokenizer.fingerprint:
+        raise ValueError(
+            f"{checkpoint} was trained with tokenizer {recorded}, but "
+            f"{vocab_source} is {tokenizer.fingerprint}. Decoding with it "
+            "would produce fluent-looking nonsense rather than an error."
         )
 
     print()

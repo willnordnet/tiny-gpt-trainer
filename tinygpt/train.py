@@ -249,6 +249,7 @@ def save_checkpoint(
     preset_name: str,
     step: int,
     val_loss: float | None,
+    tokenizer: BPETokenizer | None = None,
     tokenizer_fingerprint: str | None = None,
 ) -> None:
     """Write weights plus enough metadata to reconstruct the model from scratch.
@@ -258,14 +259,21 @@ def save_checkpoint(
     remembered which preset it was, which is the kind of promise that gets
     broken three weeks later.
 
-    tokenizer_fingerprint answers a question the weights cannot: *which*
-    vocabulary do these token ids refer to. A checkpoint stores vocab_size but
-    not the vocabulary, so two different 4096-token vocabularies are
-    indistinguishable from the file alone -- and reading a checkpoint with the
-    wrong one of them produces fluent-looking nonsense rather than an error.
-    It comes from the token shards' meta.json rather than from --vocab, because
-    what matters is the tokenizer that actually built the training data, not
-    whichever vocab.json happened to be on disk for sample previews.
+    The vocabulary travels inside too, for the same reason the config does. A
+    checkpoint's token ids only mean something against the exact merge list
+    that produced them, and every preset targets vocab_size 4096, so two
+    vocabularies trained on different corpora look identical from the outside.
+    Retraining BPE overwrites vocab.json in place, and an older checkpoint read
+    against the new one decodes every id into different text without erroring.
+    Embedding the merge list makes that structurally impossible rather than
+    merely detectable: the file carries its own codebook, sample.py needs no
+    vocab.json at all, and a checkpoint copied to another machine still works.
+    It costs about 39 KB, 0.17% of a `tiny` checkpoint.
+
+    tokenizer_fingerprint is kept separately as the cheap identity check, and
+    is the fallback when no tokenizer is available -- if vocab.json is missing
+    the run still knows, from the token shards' meta.json, *which* vocabulary
+    built its training data even though it cannot embed it.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -277,10 +285,27 @@ def save_checkpoint(
         "val_loss": "" if val_loss is None else f"{val_loss:.6f}",
         # Empty rather than absent when unknown, so the field is always present
         # and a reader can tell "no fingerprint recorded" from "old file".
-        "tokenizer_fingerprint": tokenizer_fingerprint or "",
+        "tokenizer_fingerprint": (
+            tokenizer_fingerprint
+            or (tokenizer.fingerprint if tokenizer is not None else "")
+        ),
+        "tokenizer": "" if tokenizer is None else tokenizer.to_json(indent=None),
     }
 
     mx.save_safetensors(str(path), weights, metadata=metadata)
+
+
+def tokenizer_from_checkpoint(metadata: dict) -> BPETokenizer | None:
+    """The vocabulary a checkpoint carries, or None if it predates the field.
+
+    Callers resolve in this order: an explicitly requested vocabulary first,
+    because asking for one is an instruction; then this; then vocab.json as the
+    last resort for checkpoints written before vocabularies travelled inside.
+    """
+    payload = (metadata.get("tokenizer") or "").strip()
+    if not payload:
+        return None
+    return BPETokenizer.from_json(payload, source="the checkpoint's metadata")
 
 
 def load_checkpoint(path: str | Path) -> tuple[TinyGPT, dict]:
@@ -581,6 +606,7 @@ def train(
                 val_loss = evaluate(model, val_tokens, train_cfg, context_len)
             save_checkpoint(
                 path, model, preset_name, step + 1, val_loss,
+                tokenizer=tokenizer,
                 tokenizer_fingerprint=tokenizer_fingerprint,
             )
             log(f"  [checkpoint] {path} (val loss {val_loss:.4f})")

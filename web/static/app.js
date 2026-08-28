@@ -23,6 +23,7 @@ const state = {
   lastStep: 0,
   running: false,
   scrubPinned: false,    // true once the user drags, so live samples stop stealing focus
+  maxUploadBytes: null,  // read from /api/status, so the cap lives in one place
 };
 
 const sortedPairs = (map) => [...map.entries()].sort((a, b) => a[0] - b[0]);
@@ -450,6 +451,18 @@ $("start").onclick = async () => {
 
     let source = null;
     const file = $("file").files[0];
+    // Check the size here, not just server-side. The server has to answer
+    // before it has read the body, and a client still writing when the
+    // response arrives sees a connection reset rather than the message -- so
+    // refusing up front is both instant and the only way the reason reliably
+    // reaches the person who needs it. The server keeps its own check; this
+    // one saves sending the bytes at all.
+    if (file && state.maxUploadBytes && file.size > state.maxUploadBytes) {
+      const mb = (n) => `${(n / 1024 / 1024).toFixed(1)} MB`;
+      throw new Error(
+        `${file.name} is ${mb(file.size)}, over the ${mb(state.maxUploadBytes)} limit. ` +
+        `The cap is memory: the upload is read into memory whole, and so is the corpus behind it.`);
+    }
     if (file) {
       setBadge("badgeState", "uploading", "on");
       const uploaded = await fetch("/api/upload", { method: "POST", body: file })
@@ -813,6 +826,11 @@ new ResizeObserver(scheduleRedraw).observe(document.querySelector(".grid"));
 
 (async function boot() {
   const status = await fetch("/api/status").then((r) => r.json());
+  state.maxUploadBytes = status.max_upload_bytes ?? null;
+  if (state.maxUploadBytes) {
+    const mb = Math.round(state.maxUploadBytes / 1024 / 1024);
+    $("fileLabel").textContent = `corpus (.txt, max ${mb} MB)`;
+  }
   setRunning(status.running);
   setPipeline(status.stages);
   if (status.running) connect();

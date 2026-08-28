@@ -150,17 +150,24 @@ copy without being mostly whitespace.
 
 ## Things worth knowing
 
-- **Checkpoints name the vocabulary they were trained with.** A checkpoint
-  stores `vocab_size` but not the vocabulary, and every preset targets 4096, so
-  two vocabularies trained on different corpora are indistinguishable by size
-  alone. Reading a checkpoint with the wrong one of them decodes every id into
-  different text without a single error. Checkpoints therefore record the
-  tokenizer's `fingerprint` in their metadata and the panels refuse a
-  mismatch. `list_checkpoints` carries the same verdict, so a stale checkpoint
-  is marked in the dropdown rather than only discovered after picking it. Files
-  written before that field existed report as *unverifiable* rather than being
-  rejected: that is a third state, and calling it "fine" would be exactly the
-  kind of silent wrong answer the guard exists to prevent.
+- **Checkpoints carry their own vocabulary.** A checkpoint's token ids only
+  mean something against the exact merge list that produced them, and every
+  preset targets `vocab_size` 4096, so two vocabularies trained on different
+  corpora are indistinguishable by size. Reading a checkpoint against the wrong
+  one decodes every id into different text without a single error. So the merge
+  list travels inside the file, next to `model_config` and for the same reason
+  -- about 39 KB, 0.17% of a `tiny` checkpoint. Sampling then needs no
+  `vocab.json` at all, and a checkpoint copied elsewhere still works.
+
+  Resolution order, strongest claim first: an explicitly requested vocabulary
+  (`--vocab`, or `vocab_path=`), because asking for one is an instruction; then
+  the copy inside the checkpoint; then `vocab.json`. Every path is still checked
+  against the `tokenizer_fingerprint` also recorded in the metadata, so a
+  mismatch is refused rather than decoded. Checkpoints written before
+  vocabularies travelled inside report as *unverifiable* rather than being
+  rejected -- a third state, because calling it "fine" would be exactly the
+  silent wrong answer the guard exists to prevent -- and `list_checkpoints`
+  carries the verdict so a stale one is marked in the dropdown.
 - **Uploads get their own vocabulary size.** A preset fixes `vocab_size` at
   4096, but a BPE vocab trained on your upload is whatever that corpus could
   support. After the prepare stage the runner reads the real number out of

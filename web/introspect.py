@@ -24,7 +24,11 @@ import mlx.core as mx
 
 from tinygpt.sample import generate_text, reshape_logits
 from tinygpt.tokenizer.tokenizer import BPETokenizer
-from tinygpt.train import CHECKPOINT_SUFFIX, load_checkpoint
+from tinygpt.train import (
+    CHECKPOINT_SUFFIX,
+    load_checkpoint,
+    tokenizer_from_checkpoint,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -60,7 +64,12 @@ def _load(checkpoint: str) -> tuple:
 _tokenizer_cache: dict[str, BPETokenizer] = {}
 
 
-def load_tokenizer(vocab_path: str = "vocab.json") -> BPETokenizer:
+# Where a vocabulary lives when nothing else says otherwise. Only reached for
+# checkpoints written before they carried their own.
+DEFAULT_VOCAB = "vocab.json"
+
+
+def load_tokenizer(vocab_path: str = DEFAULT_VOCAB) -> BPETokenizer:
     """Load vocab.json, memoised by path and mtime (a new run rewrites it)."""
     path = (REPO_ROOT / vocab_path).resolve()
     key = f"{path}:{path.stat().st_mtime_ns}"
@@ -75,7 +84,7 @@ class VocabMismatch(RuntimeError):
 
 
 def _checked_tokenizer(
-    model, metadata: dict, checkpoint: str, vocab_path: str
+    model, metadata: dict, checkpoint: str, vocab_path: str | None
 ) -> BPETokenizer:
     """Load the tokenizer and refuse to use it if it is not the model's own.
 
@@ -87,6 +96,12 @@ def _checked_tokenizer(
     ids are still in range, nothing crashes. The panels just quietly relabel
     every token, which in a project about seeing what the model is doing is
     about the worst way to be wrong.
+
+    Which vocabulary gets checked is itself a decision, made by
+    _resolve_tokenizer: an explicitly requested one wins, then the checkpoint's
+    own embedded copy, then vocab.json. The checks below still run in every
+    case -- an embedded vocabulary makes a mismatch impossible rather than
+    unchecked, and verifying it costs a string comparison.
 
     Two checks, in order of strength:
 
@@ -103,7 +118,7 @@ def _checked_tokenizer(
     tinygpt/data/prepare.py has verify_tokenizer_matches for the same reason on
     the token shards; this is the checkpoint-side counterpart.
     """
-    tokenizer = load_tokenizer(vocab_path)
+    tokenizer = _resolve_tokenizer(metadata, vocab_path)
 
     if tokenizer.vocab_size != model.cfg.vocab_size:
         raise VocabMismatch(
@@ -128,6 +143,29 @@ def _checked_tokenizer(
     return tokenizer
 
 
+def _resolve_tokenizer(metadata: dict, vocab_path: str | None) -> BPETokenizer:
+    """Pick the vocabulary to decode a checkpoint's ids with.
+
+    Order, strongest claim first:
+
+    1. `vocab_path`, when the caller named one. Asking for a specific
+       vocabulary is an instruction, and overriding it silently would make
+       "read this checkpoint against that vocab" impossible to express.
+    2. The copy embedded in the checkpoint. Self-contained and correct by
+       construction, so this is the normal path for anything trained after
+       vocabularies started travelling inside.
+    3. vocab.json, for checkpoints written before that.
+    """
+    if vocab_path is not None:
+        return load_tokenizer(vocab_path)
+
+    embedded = tokenizer_from_checkpoint(metadata)
+    if embedded is not None:
+        return embedded
+
+    return load_tokenizer(DEFAULT_VOCAB)
+
+
 def _vocab_status(recorded: str | None, current: str) -> str:
     """Three states, not two: "cannot tell" is not the same as "fine".
 
@@ -141,7 +179,7 @@ def _vocab_status(recorded: str | None, current: str) -> str:
     return "verified" if recorded == current else "mismatched"
 
 
-def describe_vocab_match(checkpoint: str, vocab_path: str = "vocab.json") -> dict:
+def describe_vocab_match(checkpoint: str, vocab_path: str | None = None) -> dict:
     """Whether a checkpoint's ids can be trusted against the vocabulary on disk.
 
     Exists so the viewer can label a checkpoint in the list, rather than only
@@ -149,7 +187,7 @@ def describe_vocab_match(checkpoint: str, vocab_path: str = "vocab.json") -> dic
     """
     _, metadata = mx.load(str(REPO_ROOT / checkpoint), return_metadata=True)
     recorded = (metadata.get("tokenizer_fingerprint") or "").strip()
-    current = load_tokenizer(vocab_path).fingerprint
+    current = _resolve_tokenizer(metadata, vocab_path).fingerprint
     return {
         "status": _vocab_status(recorded, current),
         "recorded": recorded,
@@ -158,7 +196,7 @@ def describe_vocab_match(checkpoint: str, vocab_path: str = "vocab.json") -> dic
 
 
 def list_checkpoints(out_dir: str = "checkpoints",
-                     vocab_path: str = "vocab.json") -> list[dict]:
+                     vocab_path: str | None = None) -> list[dict]:
     """Every checkpoint on disk, newest step first.
 
     A checkpoint carries its own preset, step and val_loss in its metadata
@@ -176,7 +214,7 @@ def list_checkpoints(out_dir: str = "checkpoints",
     # A missing vocab.json is not an error for listing -- the page still wants
     # to show what checkpoints exist. Nothing can be verified without it.
     try:
-        current_fingerprint = load_tokenizer(vocab_path).fingerprint
+        current_fingerprint = load_tokenizer(vocab_path or DEFAULT_VOCAB).fingerprint
     except Exception:  # noqa: BLE001
         current_fingerprint = None
 
@@ -194,8 +232,13 @@ def list_checkpoints(out_dir: str = "checkpoints",
             "step": int(metadata.get("step", 0)),
             "val_loss": float(val_loss) if val_loss else None,
             "size_bytes": path.stat().st_size,
+            # A checkpoint that carries its own vocabulary is self-consistent
+            # by construction; only one read against an external vocab.json can
+            # be mismatched.
             "vocab": (
-                _vocab_status(metadata.get("tokenizer_fingerprint"), current_fingerprint)
+                "verified" if (metadata.get("tokenizer") or "").strip()
+                else _vocab_status(metadata.get("tokenizer_fingerprint"),
+                                   current_fingerprint)
                 if current_fingerprint is not None else "unverifiable"
             ),
         })
@@ -209,7 +252,7 @@ def next_token_distribution(
     top_k: int = 0,
     top_p: float = 1.0,
     top_n: int = 20,
-    vocab_path: str = "vocab.json",
+    vocab_path: str | None = None,
 ) -> dict:
     """The model's next-token candidates, before and after the sampling knobs.
 
@@ -284,7 +327,7 @@ def generate_completion(
     top_k: int = 0,
     top_p: float = 1.0,
     on_text: Callable[[str], None] | None = None,
-    vocab_path: str = "vocab.json",
+    vocab_path: str | None = None,
 ) -> dict:
     """Continue a prompt, optionally handing text to a sink as it is produced.
 
@@ -346,7 +389,7 @@ def attention_grid(
     prompt: str,
     layer: int = 0,
     head: int = 0,
-    vocab_path: str = "vocab.json",
+    vocab_path: str | None = None,
 ) -> dict:
     """One layer/head's attention matrix over a prompt, with token labels.
 
