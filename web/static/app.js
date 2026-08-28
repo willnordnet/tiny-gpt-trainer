@@ -65,12 +65,27 @@ function polyline(points, scale, color, width = 1.5) {
                           "stroke-linejoin": "round", "stroke-linecap": "round" });
 }
 
+/** Point the viewBox at the element's own pixel box, so one SVG unit is one
+ *  pixel and nothing is stretched.
+ *
+ *  A viewBox is a coordinate system, not a size: the browser scales it to fit
+ *  whatever the CSS box turns out to be. With a fixed viewBox in a panel that
+ *  the grid made twice as wide, everything drawn inside -- axis labels
+ *  included -- gets stretched horizontally to match. Re-reading the real width
+ *  on every draw sidesteps that, at the cost of a layout read per redraw. */
+function sizeChart(svg) {
+  const w = Math.max(1, Math.round(svg.clientWidth));
+  const h = Math.max(1, Math.round(svg.clientHeight));
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  return { w, h };
+}
+
 /** The main loss chart: train, val, the ln(vocab) reference, and the point
  *  where validation loss stops improving. */
 function drawLossChart() {
   const svg = $("lossChart");
   svg.replaceChildren();
-  const box = { w: 560, h: 240 };
+  const box = sizeChart(svg);
 
   const train = sortedPairs(state.steps).map(([s, d]) => [s, d.loss]);
   const val = sortedPairs(state.evals);
@@ -90,7 +105,7 @@ function drawLossChart() {
     const value = yBottom + ((yTop - yBottom) * i) / ticks;
     const y = scale.y(value);
     svg.appendChild(el("line", { x1: scale.pad.left, x2: box.w - scale.pad.right,
-                                 y1: y, y2: y, stroke: "#222c38", "stroke-width": 1 }));
+                                 y1: y, y2: y, stroke: "var(--grid)", "stroke-width": 1 }));
     svg.appendChild(el("text", { x: scale.pad.left - 6, y: y + 3, "text-anchor": "end" },
                        value.toFixed(1)));
   }
@@ -108,7 +123,7 @@ function drawLossChart() {
                                  stroke: "var(--baseline)", "stroke-width": 1.5,
                                  "stroke-dasharray": "5 4" }));
     svg.appendChild(el("text", { x: box.w - scale.pad.right - 2, y: y - 5,
-                                 "text-anchor": "end", fill: "#9d80e8" },
+                                 "text-anchor": "end", fill: "var(--baseline)" },
                        `ln(vocab) = ${state.baseline.toFixed(2)}`));
   }
 
@@ -142,7 +157,7 @@ function markOverfitting(svg, scale, val) {
   const x = scale.x(best[0]);
   svg.appendChild(el("line", { x1: x, x2: x, y1: scale.pad.top, y2: scale.pad.top + scale.h,
                                stroke: "var(--bad)", "stroke-width": 1, "stroke-dasharray": "3 3" }));
-  svg.appendChild(el("text", { x: x + 4, y: scale.pad.top + 10, fill: "#f85149" },
+  svg.appendChild(el("text", { x: x + 4, y: scale.pad.top + 10, fill: "var(--bad)" },
                      `best val ${best[1].toFixed(2)} @ ${best[0]}`));
   note.textContent = `overfitting past step ${best[0]}`;
 }
@@ -152,7 +167,7 @@ function drawSpark(id, points, color) {
   const svg = $(id);
   svg.replaceChildren();
   if (points.length < 2) return;
-  const box = { w: 180, h: 56 };
+  const box = sizeChart(svg);
   const values = points.map((p) => p[1]).filter(Number.isFinite);
   if (!values.length) return;
 
@@ -195,7 +210,9 @@ function appendLog(event) {
   const line = document.createElement("div");
   line.className = event.type;
   if (event.type === "stage_start") {
-    line.textContent = `\n$ ${event.command}`;
+    // No leading "\n" here: the blank line it used to print is now .stage's
+    // margin-top, which separates the header without costing a whole row.
+    line.textContent = `$ ${event.command}`;
     line.className = "stage";
   } else if (event.type === "stage_end") {
     line.textContent = `[exit ${event.returncode}] ${event.stage}`;
@@ -206,10 +223,63 @@ function appendLog(event) {
   } else {
     line.textContent = event.text ?? "";
   }
+
+  // A trainer prints plenty of blank lines to group its output, and at a full
+  // line-height they push the interesting lines off the pane. Keep them -- the
+  // raw log is meant to be a faithful copy of what the process wrote -- but
+  // collapse them to a sliver.
+  if (!line.textContent) line.className = "blank";
+
   pane.appendChild(line);
 
   while (pane.childElementCount > LOG_MAX_LINES) pane.removeChild(pane.firstChild);
   if (atBottom) pane.scrollTop = pane.scrollHeight;
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline strip
+//
+// The masthead lists all four stages the runner can build, because which ones
+// a given run *skips* is worth seeing. The strip is driven entirely by events
+// the page already receives -- there is no extra endpoint behind it.
+// ---------------------------------------------------------------------------
+
+const STAGE_CHIPS = [...document.querySelectorAll(".stage-chip")];
+
+const chipFor = (name) => STAGE_CHIPS.find((chip) => chip.dataset.stage === name);
+
+/** Reset the strip for a job made of `stages`.
+ *
+ * tokenizer/prepare/gate are conditional (web/runner.py builds them only when
+ * a corpus was uploaded or the gate was ticked), so anything absent from this
+ * job is struck through rather than hidden. */
+function setPipeline(stages) {
+  const planned = new Set(stages || []);
+  for (const chip of STAGE_CHIPS) {
+    chip.className = "stage-chip";
+    if (planned.size && !planned.has(chip.dataset.stage)) chip.classList.add("skipped");
+  }
+}
+
+/** Light the running stage, and settle everything before it as done. */
+function markStageStart(name) {
+  let reached = false;
+  for (const chip of STAGE_CHIPS) {
+    if (chip.dataset.stage === name) reached = true;
+    else if (!reached && !chip.classList.contains("skipped")) {
+      chip.classList.remove("active");
+      chip.classList.add("done");
+    }
+  }
+  const chip = chipFor(name);
+  if (chip) { chip.classList.remove("skipped", "done", "failed"); chip.classList.add("active"); }
+}
+
+function markStageEnd(name, returncode) {
+  const chip = chipFor(name);
+  if (!chip) return;
+  chip.classList.remove("active");
+  chip.classList.add(returncode === 0 ? "done" : "failed");
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +362,11 @@ function handle(event) {
 
     case "stage_start":
       setBadge("badgeStage", `stage: ${event.stage} (${event.index + 1}/${event.total})`, "on");
+      markStageStart(event.stage);
+      break;
+
+    case "stage_end":
+      markStageEnd(event.stage, event.returncode);
       break;
 
     case "pipeline_done":
@@ -387,7 +462,7 @@ $("start").onclick = async () => {
     }
 
     setRunning(true);
-    await postJSON("/api/run", {
+    const started = await postJSON("/api/run", {
       source,
       preset: $("preset").value,
       steps: Number($("steps").value),
@@ -395,6 +470,7 @@ $("start").onclick = async () => {
       overfit_gate: $("gate").checked,
       new_tokenizer: $("newTokenizer").checked,
     });
+    setPipeline(started.stages);
     connect();
   } catch (error) {
     setRunning(false);
@@ -579,7 +655,7 @@ $("drawAttn").onclick = async () => {
       // keeps the small-but-nonzero weights visible without claiming they
       // are larger than they are.
       td.style.background = weight > 0
-        ? `rgba(106,169,255,${Math.sqrt(weight).toFixed(3)})`
+        ? `rgba(var(--heat), ${Math.sqrt(weight).toFixed(3)})`
         : "transparent";
       td.title = weight.toFixed(4);
       tr.appendChild(td);
@@ -725,9 +801,15 @@ $("genRun").onclick = async () => {
 // Boot
 // ---------------------------------------------------------------------------
 
+// The charts read their own pixel width on every draw, so a resized panel has
+// to trigger one. scheduleRedraw already coalesces to a single frame, which is
+// what makes it safe to fire from an observer that reports every drag frame.
+new ResizeObserver(scheduleRedraw).observe(document.querySelector(".grid"));
+
 (async function boot() {
   const status = await fetch("/api/status").then((r) => r.json());
   setRunning(status.running);
+  setPipeline(status.stages);
   if (status.running) connect();
   await loadCheckpoints();
 })();

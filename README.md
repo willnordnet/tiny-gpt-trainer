@@ -12,6 +12,25 @@ sampled from. See [`DESIGN.md`](DESIGN.md) for the architecture and the
 reasoning behind each choice, and [`CLAUDE.md`](CLAUDE.md) for the conventions
 the code follows.
 
+## Watch it learn
+
+![The tiny-GPT-trainer viewer: the loss curve falling away from the ln(vocab)
+baseline, a scrubber through the samples the trainer generated as it went, and
+the next-token distribution reshaping live under the sampling
+knobs.](docs/viewer.png)
+
+`web/` is an optional local viewer for a run in progress. It shells out to the
+same `python -m tinygpt.*` commands you would type and reads their stdout, so
+the trainer needs no changes and cannot be broken by it.
+
+```bash
+python -m web.server --port 8000
+# open http://127.0.0.1:8000
+```
+
+Full walkthrough below: [Watching a run in the
+browser](#watching-a-run-in-the-browser).
+
 ## What this is not
 
 Stated up front so it is not discovered by disappointment later:
@@ -348,6 +367,18 @@ learned nothing", a scrubber through the samples the trainer generates as it
 goes, a next-token distribution you can reshape live with the temperature /
 top-k / top-p sliders, an attention heatmap, and the raw log.
 
+Each panel defines its own terms inline: what separates `train` loss from
+`val` loss, what `grad norm` spiking means, what `top-p` keeps that `top-k`
+does not. They sit beside the number or the slider they describe rather than in
+a glossary at the foot of the page, so a term can be looked up at the moment you
+first wonder about it.
+
+The masthead carries the pipeline itself (`tokenizer → prepare → gate → train`,
+the four stages `web/runner.py` builds) and lights each one as the run reaches
+it. The first three are conditional, so a run with no upload and no gate is just
+`train`, and the strip strikes through the stages it skipped rather than hiding
+that they exist.
+
 There is also a **Generate** panel: type a prompt, get a continuation streamed
 back a token at a time from any checkpoint. It is a completion playground
 rather than a chat window, because that is what this model is -- a base LM
@@ -645,6 +676,7 @@ tiny-gpt-trainer/
 │   └── tokens/                  # train.npy / val.npy (gitignored)
 ├── scripts/
 │   └── get_tinyshakespeare.py
+├── docs/                        # screenshots used by the READMEs
 ├── tests/                   # fast plumbing tests, see DESIGN.md §6.1
 └── logs/                    # training logs + periodic samples (gitignored)
 ```

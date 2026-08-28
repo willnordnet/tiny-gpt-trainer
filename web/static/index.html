@@ -8,17 +8,58 @@
 </head>
 <body>
 
-<header>
+<header class="masthead">
   <h1>tiny-GPT-trainer <span>&mdash; watching a run</span></h1>
-  <p>Local viewer. Shells out to <code>python -m tinygpt.train</code> and reads its stdout; the trainer itself does not know this page exists.</p>
+
+  <p class="lede">A training run is worth <em>watching</em>. A scrolling log hides the two things
+  most worth seeing: the shape of the loss curve, and the arc where a generated sample stops being
+  noise and starts being language. This page shows both while they happen.</p>
+
+  <!-- The four stages the runner actually builds, in the order it runs them.
+       Lights up as the run moves through it. -->
+  <ol class="pipeline" id="pipeline">
+    <li><span class="stage-chip" data-stage="tokenizer"><span class="n">1</span><span class="what">tokenizer</span></span></li>
+    <li aria-hidden="true" class="arrow">&rarr;</li>
+    <li><span class="stage-chip" data-stage="prepare"><span class="n">2</span><span class="what">prepare</span></span></li>
+    <li aria-hidden="true" class="arrow">&rarr;</li>
+    <li><span class="stage-chip" data-stage="gate"><span class="n">3</span><span class="what">gate</span></span></li>
+    <li aria-hidden="true" class="arrow">&rarr;</li>
+    <li><span class="stage-chip" data-stage="train"><span class="n">4</span><span class="what">train</span></span></li>
+  </ol>
+
+  <p class="how">Each stage is one subprocess. The server shells out to the same
+  <code>python -m tinygpt.*</code> commands you would type and reads their stdout, so the trainer
+  needs no changes and does not know this page exists &mdash; and a run that crashes takes down a
+  child process, not the viewer. The first three stages are conditional: with no corpus uploaded and
+  the gate unchecked, a run is just <code>train</code>.</p>
 </header>
 
 <div class="grid">
 
   <!-- 1. run controls -->
-  <section class="panel">
+  <section class="panel" id="panelRun">
     <h2>Run</h2>
-    <p class="hint">Leave the corpus empty to train on whatever is already prepared in <code>data/tokens</code>. Uploading a .txt re-runs the pipeline from that file.</p>
+    <p class="hint">Leave the corpus empty to train on whatever is already prepared in
+    <code>data/tokens</code>. Uploading a <code>.txt</code> re-runs the pipeline from that file
+    (2 MB cap &mdash; the BPE trainer is hand-rolled and <code>O(merges &times; corpus)</code>, so a
+    bigger file would look like a hang). The overfit gate trains one batch to near-zero loss before
+    the real run starts; if it fails, nothing else runs.</p>
+
+    <dl class="terms">
+      <dt>preset</dt>
+      <dd>Model size. <code>tiny</code> is 6 layers at <code>d_model</code> 256 over a 256-token
+      context; <code>small</code> is 8 layers at 512 over 512. Both use a 4096-token vocabulary.</dd>
+      <dt>steps</dt>
+      <dd>Optimiser updates, not passes over the corpus. One step is one batch &mdash; 32 &times; 256
+      = 8,192 tokens on <code>tiny</code>.</dd>
+      <dt>overfit gate</dt>
+      <dd>Trains one fixed batch over and over. A model that cannot drive loss to near zero on a
+      single batch is broken, so this catches wiring bugs in seconds instead of after a full run.</dd>
+      <dt>BPE vocab</dt>
+      <dd>Byte-pair encoding: the token table, built by repeatedly merging the most frequent
+      adjacent pair in a corpus. Training a new one <strong>overwrites <code>vocab.json</code> in
+      place</strong>, which orphans every checkpoint made before it.</dd>
+    </dl>
 
     <div class="row">
       <div class="field">
@@ -28,32 +69,34 @@
           <option value="small">small &middot; 27.80M</option>
         </select>
       </div>
-      <div class="field">
+      <div class="field narrow">
         <label for="steps">steps</label>
-        <input type="number" id="steps" value="400" min="1" max="100000" style="width:90px">
+        <input type="number" id="steps" value="400" min="1" max="100000">
       </div>
-      <div class="field" style="flex:1; min-width:160px">
+      <div class="field grow">
         <label for="prompt">sample prompt</label>
         <input type="text" id="prompt" value="ROMEO:">
       </div>
     </div>
 
-    <div class="row" style="margin-top:10px">
-      <div class="field" style="flex:1; min-width:200px">
+    <div class="row">
+      <div class="field grow">
         <label for="file">corpus (.txt, max 2 MB)</label>
         <input type="file" id="file" accept=".txt,text/plain">
       </div>
     </div>
 
-    <div class="row" style="margin-top:10px">
+    <div class="row">
       <label class="checkline"><input type="checkbox" id="gate" checked> run the overfit gate first</label>
       <label class="checkline"><input type="checkbox" id="newTokenizer"> train a new BPE vocab on the upload</label>
     </div>
 
-    <div class="row" style="margin-top:14px">
+    <div class="row spaced">
       <button id="start" class="primary">Start</button>
       <button id="stop" class="danger" disabled>Stop</button>
     </div>
+
+    <div class="err-banner hidden" id="error"></div>
 
     <div class="badges">
       <span class="badge" id="badgeState">idle</span>
@@ -61,14 +104,31 @@
       <span class="badge" id="badgeGate">gate: not run</span>
       <span class="badge" id="badgeSource">corpus: existing tokens</span>
     </div>
-
-    <div class="err-banner hidden" id="error"></div>
   </section>
 
   <!-- 2. loss -->
-  <section class="panel">
+  <section class="panel" id="panelLoss">
     <h2>Loss</h2>
-    <p class="hint">The dashed line is <code>ln(vocab_size)</code>: the loss of a model that has learned nothing. Everything below it is real learning. When the orange line turns back up while the blue keeps falling, the model has started memorising instead of generalising.</p>
+    <p class="hint">The dashed line is <code>ln(vocab_size)</code>: the loss of a model that has
+    learned nothing, so everything below it is real learning. When the orange line turns back up
+    while the blue keeps falling, the model has started memorising instead of generalising &mdash;
+    the chart marks where that began. On a small corpus it happens early and hard, which makes
+    overfitting something you watch rather than read about.</p>
+
+    <dl class="terms">
+      <dt>loss</dt>
+      <dd>Cross-entropy in <em>nats</em>: the model's average surprise at the token that actually
+      came next. Lower is better, and <code>ln(vocab_size)</code> is what pure guessing scores.</dd>
+      <dt>train</dt>
+      <dd>Loss on the batches the model is being updated on right now. The optimiser is pushing this
+      number down directly, so it falls almost by construction &mdash; it can keep falling long after
+      the model has stopped learning anything general.</dd>
+      <dt>val</dt>
+      <dd>Loss on held-out text the model never trains on. This is the honest one. The gap between
+      it and <code>train</code> is the part the model memorised rather than learned.</dd>
+      <dt>tok/s</dt>
+      <dd>Throughput: training tokens consumed per second. A speed measure, not a quality one.</dd>
+    </dl>
 
     <div class="readout">
       <div><span class="k">step</span><span class="v" id="rStep">&mdash;</span></div>
@@ -77,7 +137,7 @@
       <div><span class="k">tok/s</span><span class="v" id="rToks">&mdash;</span></div>
     </div>
 
-    <div class="chart-wrap"><svg id="lossChart" viewBox="0 0 560 240" preserveAspectRatio="none"></svg></div>
+    <div class="chart-wrap"><svg id="lossChart"></svg></div>
     <div class="legend">
       <span><i style="background:var(--train)"></i>train</span>
       <span><i style="background:var(--val)"></i>val</span>
@@ -86,43 +146,86 @@
     </div>
 
     <div class="sparks">
-      <div class="spark"><h3>learning rate</h3><svg id="lrChart" viewBox="0 0 180 56"></svg></div>
-      <div class="spark"><h3>grad norm</h3><svg id="gnChart" viewBox="0 0 180 56"></svg></div>
-      <div class="spark"><h3>tokens/sec</h3><svg id="tsChart" viewBox="0 0 180 56"></svg></div>
+      <div class="spark"><h3>learning rate</h3><svg id="lrChart"></svg></div>
+      <div class="spark"><h3>grad norm</h3><svg id="gnChart"></svg></div>
+      <div class="spark"><h3>tokens/sec</h3><svg id="tsChart"></svg></div>
     </div>
+
+    <dl class="terms">
+      <dt>learning rate</dt>
+      <dd>How far the optimiser moves on each step. It warms up from near zero over the first 100
+      steps, then decays along a cosine to a small floor &mdash; large steps early to find the
+      basin, small ones late to settle into it.</dd>
+      <dt>grad norm</dt>
+      <dd>The size of the whole gradient before clipping. Spikes are unstable steps; a value pinned
+      at the clip threshold means the update is being cut every time; a drift toward zero means
+      learning has stalled.</dd>
+      <dt>tokens/sec</dt>
+      <dd>The same throughput as <code>tok/s</code>, plotted over the run. A steady line means
+      nothing is throttling or contending for the GPU.</dd>
+    </dl>
   </section>
 
-  <!-- 3. sample timeline -->
-  <section class="panel">
+  <!-- 3. raw log -->
+  <section class="panel" id="panelLog">
+    <h2>Raw log</h2>
+    <p class="hint">Every line the child processes printed, parsed or not, in order. The dashboard
+    should never be the only way to see what happened. Blank lines are kept but collapsed to a
+    sliver, so the run stays readable without editing what it printed.</p>
+    <div class="log" id="log"></div>
+  </section>
+
+  <!-- 4. sample timeline -->
+  <section class="panel" id="panelSample">
     <h2>Sample timeline</h2>
-    <p class="hint">The trainer generates from the same prompt every <code>sample_interval</code> steps. Drag to watch the model go from noise to words to something with the shape of dialogue.</p>
+    <p class="hint">The trainer already generates from the same prompt every
+    <code>sample_interval</code> steps, so this panel is a scrubber over output it printed anyway.
+    Drag it to watch noise become words become something with the shape of dialogue.</p>
+
     <input type="range" id="scrub" min="0" max="0" value="0" disabled>
     <div class="readout">
       <div><span class="k">at step</span><span class="v" id="sampleStep">&mdash;</span></div>
-      <div><span class="k">of</span><span class="v" id="sampleCount">0 samples</span></div>
+      <div><span class="k">of</span><span class="v small" id="sampleCount">0 samples</span></div>
     </div>
     <div class="sample-text" id="sampleText">No samples yet. They start arriving once the run passes its first sample interval.</div>
   </section>
 
-  <!-- 4. probability lab -->
-  <section class="panel">
+  <!-- 5. probability lab -->
+  <section class="panel" id="panelLab">
     <h2>Next-token lab</h2>
-    <p class="hint">One forward pass, one distribution. The pale bar is what the model actually predicted; the solid bar is what survives temperature, top-k and top-p. Struck-out rows are candidates the knobs eliminated outright.</p>
+    <p class="hint">One forward pass, one distribution. The pale bar is what the model actually
+    predicted; the solid bar is what survives temperature, top-k and top-p. Struck-out rows are
+    candidates the knobs eliminated outright &mdash; showing the cut rather than hiding it is the
+    point. The reshaping runs server-side through the same <code>reshape_logits</code> that
+    <code>generate()</code> uses, not a copy of it in JavaScript.</p>
 
     <div class="row">
-      <div class="field" style="flex:1; min-width:150px">
+      <div class="field grow">
         <label for="labCkpt">checkpoint</label>
         <select id="labCkpt"></select>
       </div>
       <button id="refreshCkpts">Reload</button>
     </div>
-    <div class="row" style="margin-top:8px">
-      <div class="field" style="flex:1">
+    <div class="row">
+      <div class="field grow">
         <label for="labPrompt">prefix</label>
         <input type="text" id="labPrompt" value="ROMEO:">
       </div>
       <button id="commit">Commit top token &rarr;</button>
     </div>
+
+    <dl class="terms">
+      <dt>temperature</dt>
+      <dd>Divides the logits before the softmax. Below 1 sharpens the distribution toward the
+      model's favourite token; above 1 flattens it toward a coin flip. At 0 it is pure argmax.</dd>
+      <dt>top-k</dt>
+      <dd>Keep only the <em>k</em> most likely tokens and renormalise, discarding the long tail
+      however likely it was. Off means no cut.</dd>
+      <dt>top-p</dt>
+      <dd>Nucleus sampling: keep the smallest set of tokens whose probabilities already sum to
+      <em>p</em>. Unlike top-k it adapts &mdash; a confident prediction keeps few candidates, an
+      uncertain one keeps many.</dd>
+    </dl>
 
     <div class="sliders">
       <div>
@@ -139,37 +242,41 @@
       </div>
     </div>
 
-    <div class="readout" style="margin-top:12px">
-      <div><span class="k">entropy (nats)</span><span class="v" id="entropy">&mdash;</span></div>
-      <div><span class="k">raw</span><span class="v" id="entropyRaw">&mdash;</span></div>
-      <div><span class="k">uniform</span><span class="v" id="entropyUniform">&mdash;</span></div>
+    <div class="row spaced">
+      <div class="readout">
+        <div><span class="k">entropy (nats)</span><span class="v" id="entropy">&mdash;</span></div>
+        <div><span class="k">raw</span><span class="v" id="entropyRaw">&mdash;</span></div>
+        <div><span class="k">uniform</span><span class="v" id="entropyUniform">&mdash;</span></div>
+      </div>
     </div>
-    <p class="hint" style="margin-top:4px">Entropy is in nats, the same units as the loss chart: it is the loss the model would take if its own guess turned out to be right.</p>
+    <p class="hint">Entropy is in nats, the same units as the loss chart: it is the loss the model
+    would take if its own guess turned out to be right.</p>
 
     <div class="bars" id="bars"></div>
   </section>
 
-  <!-- 5. generate -->
-  <section class="panel">
+  <!-- 6. generate -->
+  <section class="panel" id="panelGen">
     <h2>Generate</h2>
     <p class="hint"><strong>This is a base model, not an assistant.</strong> It was trained only to
     predict the next token in TinyShakespeare, with no instruction tuning and no chat template, so
     it continues a prefix in the style of its corpus. Ask it a question and it will not answer one.
-    Text streams in as it is produced, one token at a time.</p>
+    Text streams in as it is produced, one token at a time &mdash; there is no KV cache, so you can
+    watch it slow down as the sequence grows.</p>
 
     <div class="row">
-      <div class="field" style="flex:1; min-width:150px">
+      <div class="field grow">
         <label for="genCkpt">checkpoint</label>
         <select id="genCkpt"></select>
       </div>
-      <div class="field">
+      <div class="field narrow">
         <label for="genMax">max tokens</label>
-        <input type="number" id="genMax" value="200" min="1" max="1000" style="width:90px">
+        <input type="number" id="genMax" value="200" min="1" max="1000">
       </div>
     </div>
 
-    <div class="row" style="margin-top:8px">
-      <div class="field" style="flex:1">
+    <div class="row">
+      <div class="field grow">
         <label for="genPrompt">prompt</label>
         <textarea id="genPrompt" rows="3">ROMEO:</textarea>
       </div>
@@ -190,38 +297,44 @@
       </div>
     </div>
 
-    <div class="row" style="margin-top:14px">
+    <div class="row spaced">
       <button id="genRun" class="primary">Generate</button>
       <button id="genStop" class="danger" disabled>Stop</button>
     </div>
 
-    <p class="hint" id="genStats" style="margin:10px 0 0">&mdash;</p>
+    <p class="hint" id="genStats">&mdash;</p>
 
-    <div class="sample-text" id="genOut" style="margin-top:8px"></div>
+    <div class="sample-text" id="genOut"></div>
   </section>
 
-  <!-- 6. attention -->
-  <section class="panel wide">
+  <!-- 7. attention -->
+  <section class="panel" id="panelAttn">
     <h2>Attention</h2>
-    <p class="hint">Row <em>i</em> is what token <em>i</em> attended to. The empty upper triangle is the causal mask: a token can never see the future, which is the property that makes next-token training honest.</p>
+    <p class="hint">Row <em>i</em> is what token <em>i</em> attended to. The empty upper triangle is
+    the causal mask: a token can never see the future, which is the property that makes next-token
+    training honest. Cell shading is <code>sqrt(weight)</code>, for display only &mdash; attention is
+    spiky, and on a linear ramp everything but the peak would wash out.</p>
+
+    <dl class="terms">
+      <dt>layer</dt>
+      <dd>Which transformer block, of the 6 in <code>tiny</code>. Early layers tend to attend
+      locally, to the token just behind; later ones carry longer-range structure.</dd>
+      <dt>head</dt>
+      <dd>Attention runs as several heads in parallel inside one layer, each with its own slice of
+      <code>d_model</code> and its own view of the sequence. Heads specialise, which is why one can
+      look useless and its neighbour sharp.</dd>
+    </dl>
 
     <div class="row">
-      <div class="field" style="flex:1; min-width:150px">
+      <div class="field grow">
         <label for="attnPrompt">prompt</label>
         <input type="text" id="attnPrompt" value="To be or not to be, that is the question">
       </div>
-      <div class="field"><label for="attnLayer">layer</label><select id="attnLayer" style="width:80px"></select></div>
-      <div class="field"><label for="attnHead">head</label><select id="attnHead" style="width:80px"></select></div>
+      <div class="field narrow"><label for="attnLayer">layer</label><select id="attnLayer"></select></div>
+      <div class="field narrow"><label for="attnHead">head</label><select id="attnHead"></select></div>
       <button id="drawAttn">Draw</button>
     </div>
     <div class="attn-wrap" id="attnWrap"><p class="hint">Pick a checkpoint in the lab above, then press Draw.</p></div>
-  </section>
-
-  <!-- 7. raw log -->
-  <section class="panel wide">
-    <h2>Raw log</h2>
-    <p class="hint">Every line the child processes printed, parsed or not. The dashboard should never be the only way to see what happened.</p>
-    <div class="log" id="log"></div>
   </section>
 
 </div>

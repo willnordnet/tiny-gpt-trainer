@@ -8,6 +8,9 @@ python -m web.server --port 8000
 # then open http://127.0.0.1:8000
 ```
 
+![The viewer: the loss curve against the ln(vocab) baseline, the sample
+scrubber, and the next-token distribution under the sampling knobs.](../docs/viewer.png)
+
 ## What it is not
 
 Not an inference server, and not a deployment path. It binds to `127.0.0.1`
@@ -54,7 +57,28 @@ python -m web.runner                                       # gate + short run
 python -m web.introspect                                   # newest checkpoint
 ```
 
+## The masthead
+
+Above the panels, the four stages `runner.py` can build --
+`tokenizer → prepare → gate → train` -- shown in the order they run and lit as
+the run reaches each one. The first three are conditional (`build_stages`
+includes them only for an upload or a ticked gate), so stages this particular
+job skipped are struck through rather than hidden: which steps did *not* run is
+part of reading a run. It is driven by the same `stage_start` / `stage_end`
+events that drive the status badges, so it needs nothing from the server that
+the page was not already receiving.
+
 ## The panels
+
+In page order: **Run** and **Loss** side by side, then the **raw log** across
+the full width, then **Sample timeline** / **Next-token lab** / **Generate**,
+then **Attention**. The log sits third rather than last because it is the
+ground truth the panels above it are summarising, and reading it should not
+mean scrolling past everything else.
+
+Each panel carries a short `<dl>` defining its own terms -- `train` versus
+`val`, `grad norm`, `top-k` versus `top-p`, `layer` versus `head` -- beside the
+control or readout in question rather than in one glossary at the bottom.
 
 **Run.** Preset, steps, sample prompt, and an optional `.txt` upload (2 MB cap
 — the BPE trainer is hand-rolled and `O(merges × corpus)`, so a bigger file
@@ -104,7 +128,11 @@ the causal mask. Cell shading is `sqrt(weight)`, for display only: attention
 is spiky, and on a linear ramp everything but the peak reads as black.
 
 **Raw log.** Every line the child processes printed, parsed or not. The
-dashboard should never be the only way to see what happened.
+dashboard should never be the only way to see what happened. A trainer prints
+plenty of blank lines to group its output, and one `<div>` per line at a full
+line-height meant those blanks pushed the interesting lines off the pane; they
+are kept in the DOM but collapsed to a sliver, so the pane stays a faithful
+copy without being mostly whitespace.
 
 ## Things worth knowing
 
