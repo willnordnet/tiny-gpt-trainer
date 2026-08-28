@@ -80,9 +80,13 @@ Each panel carries a short `<dl>` defining its own terms -- `train` versus
 `val`, `grad norm`, `top-k` versus `top-p`, `layer` versus `head` -- beside the
 control or readout in question rather than in one glossary at the bottom.
 
-**Run.** Preset, steps, sample prompt, and an optional `.txt` upload (2 MB cap
-— the BPE trainer is hand-rolled and `O(merges × corpus)`, so a bigger file
-would look like a hang). The overfit gate is a checkbox and its verdict is a
+**Run.** Preset, steps, sample prompt, and an optional `.txt` upload (16 MB
+cap, a memory guard rather than a time one -- the whole body is read into
+memory, and so is the corpus behind it). BPE training is the slow part but it
+scales with *distinct words*, not bytes. 3.5 MB of Conan Doyle is 3.2x the
+bytes of 1.1 MB of Shakespeare but only 1.9x the distinct words, and learns a
+4096-token vocab in ~117s against ~57s, with merge progress and an ETA in the
+raw log throughout. The overfit gate is a checkbox and its verdict is a
 badge, because `DESIGN.md` §6.2 treats it as the check you do not train
 without; a green light makes that discipline visible instead of buried in a
 flag. A failing gate exits non-zero and the pipeline stops there.

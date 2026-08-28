@@ -32,10 +32,21 @@ from web.runner import REPO_ROOT, Job, build_stages
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 UPLOAD_DIR = REPO_ROOT / "data" / "raw"
 
-# A corpus this size takes a couple of minutes to learn a BPE vocab from, and
-# the hand-rolled trainer in tinygpt/ is O(merges x corpus). Larger uploads
-# are refused with an explanation rather than appearing to hang.
-MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+# The cost of an upload is dominated by learning a BPE vocab from it, and the
+# hand-rolled trainer in tinygpt/ is O(merges x *distinct words*), not
+# O(merges x corpus): it collapses the text to a unique-word frequency table
+# before it merges anything. English prose runs out of new words long before it
+# runs out of bytes, so the cost grows far more slowly than the file does.
+# Measured here: 3.5 MB of Conan Doyle is 3.2x the bytes of 1.1 MB of
+# Shakespeare but only 1.9x the distinct words, and learns a 4096-token vocab
+# in 117s against 57s. The trainer prints merge progress and an ETA throughout,
+# so a wait that long is visible rather than mysterious.
+#
+# The cap that remains is a memory guard, not a time one: _upload reads the
+# whole body with rfile.read() and the adapter then does path.read_text(), so
+# an unbounded upload would be a way to run this machine out of memory by
+# mistyping a filename.
+MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 
 # How long an idle SSE connection waits before sending a keep-alive comment.
 # Without one, a proxy or a laptop sleeping can drop a quiet connection and
@@ -279,8 +290,8 @@ class Handler(BaseHTTPRequestHandler):
         if length > MAX_UPLOAD_BYTES:
             raise ValueError(
                 f"{length:,} bytes exceeds the {MAX_UPLOAD_BYTES:,} byte limit. "
-                "Training a BPE vocabulary is O(merges x corpus) and hand-rolled "
-                "here, so a larger file would look like a hang."
+                "The limit is memory, not time: the upload is read into memory "
+                "whole, and so is the corpus behind it."
             )
 
         raw = self.rfile.read(length)

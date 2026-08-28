@@ -41,9 +41,11 @@
     <h2>Run</h2>
     <p class="hint">Leave the corpus empty to train on whatever is already prepared in
     <code>data/tokens</code>. Uploading a <code>.txt</code> re-runs the pipeline from that file
-    (2 MB cap &mdash; the BPE trainer is hand-rolled and <code>O(merges &times; corpus)</code>, so a
-    bigger file would look like a hang). The overfit gate trains one batch to near-zero loss before
-    the real run starts; if it fails, nothing else runs.</p>
+    (16 MB cap, which is a memory guard: the upload is read into memory whole). Learning a BPE vocab
+    is the slow part, but it scales with distinct words rather than bytes &mdash; a 3.5 MB novel
+    collection takes about two minutes, with merge progress and an ETA in the raw log. The overfit
+    gate trains one batch to near-zero loss before the real run starts; if it fails, nothing else
+    runs.</p>
 
     <dl class="terms">
       <dt>preset</dt>
@@ -81,7 +83,7 @@
 
     <div class="row">
       <div class="field grow">
-        <label for="file">corpus (.txt, max 2 MB)</label>
+        <label for="file">corpus (.txt, max 16 MB)</label>
         <input type="file" id="file" accept=".txt,text/plain">
       </div>
     </div>
