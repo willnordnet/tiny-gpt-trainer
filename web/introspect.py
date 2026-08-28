@@ -74,8 +74,10 @@ class VocabMismatch(RuntimeError):
     """The tokenizer on disk is not the one this checkpoint was trained with."""
 
 
-def _checked_tokenizer(model, checkpoint: str, vocab_path: str) -> BPETokenizer:
-    """Load the tokenizer and refuse to use it if it does not fit the model.
+def _checked_tokenizer(
+    model, metadata: dict, checkpoint: str, vocab_path: str
+) -> BPETokenizer:
+    """Load the tokenizer and refuse to use it if it is not the model's own.
 
     This guards a failure mode that is silent and therefore nasty. A checkpoint
     stores weights and a vocab_size, but not the vocabulary itself; the ids it
@@ -86,10 +88,23 @@ def _checked_tokenizer(model, checkpoint: str, vocab_path: str) -> BPETokenizer:
     every token, which in a project about seeing what the model is doing is
     about the worst way to be wrong.
 
+    Two checks, in order of strength:
+
+    1. The tokenizer fingerprint, when the checkpoint records one. This is the
+       real test -- it identifies the exact merge list, so two different
+       4096-token vocabularies are told apart. Retraining a vocab on a new
+       corpus is precisely the case vocab_size alone cannot see, because the
+       target size is a config value and comes out the same both times.
+    2. vocab_size, as a fallback. Checkpoints written before the fingerprint
+       field existed carry no fingerprint, and refusing them outright would be
+       worse than the weak check they used to get. They are reported as
+       unverifiable by describe_vocab_match() rather than silently trusted.
+
     tinygpt/data/prepare.py has verify_tokenizer_matches for the same reason on
     the token shards; this is the checkpoint-side counterpart.
     """
     tokenizer = load_tokenizer(vocab_path)
+
     if tokenizer.vocab_size != model.cfg.vocab_size:
         raise VocabMismatch(
             f"{vocab_path} has vocab_size={tokenizer.vocab_size}, but "
@@ -98,19 +113,72 @@ def _checked_tokenizer(model, checkpoint: str, vocab_path: str) -> BPETokenizer:
             "every token. Training a new BPE vocab overwrites vocab.json, so "
             "checkpoints from before that run can no longer be read."
         )
+
+    recorded = (metadata.get("tokenizer_fingerprint") or "").strip()
+    if recorded and recorded != tokenizer.fingerprint:
+        raise VocabMismatch(
+            f"{checkpoint} was trained with tokenizer {recorded}, but "
+            f"{vocab_path} is {tokenizer.fingerprint}. Both have "
+            f"vocab_size={tokenizer.vocab_size}, so the ids would decode "
+            "without error into the wrong text entirely. Training a new BPE "
+            "vocab overwrites vocab.json in place; point vocab_path at the "
+            "vocabulary this checkpoint was trained with, or retrain it."
+        )
+
     return tokenizer
 
 
-def list_checkpoints(out_dir: str = "checkpoints") -> list[dict]:
+def _vocab_status(recorded: str | None, current: str) -> str:
+    """Three states, not two: "cannot tell" is not the same as "fine".
+
+    Checkpoints written before the fingerprint field existed record nothing,
+    and calling those verified would be a lie of exactly the kind this guard
+    exists to prevent.
+    """
+    recorded = (recorded or "").strip()
+    if not recorded:
+        return "unverifiable"
+    return "verified" if recorded == current else "mismatched"
+
+
+def describe_vocab_match(checkpoint: str, vocab_path: str = "vocab.json") -> dict:
+    """Whether a checkpoint's ids can be trusted against the vocabulary on disk.
+
+    Exists so the viewer can label a checkpoint in the list, rather than only
+    finding out when a panel raises on it.
+    """
+    _, metadata = mx.load(str(REPO_ROOT / checkpoint), return_metadata=True)
+    recorded = (metadata.get("tokenizer_fingerprint") or "").strip()
+    current = load_tokenizer(vocab_path).fingerprint
+    return {
+        "status": _vocab_status(recorded, current),
+        "recorded": recorded,
+        "current": current,
+    }
+
+
+def list_checkpoints(out_dir: str = "checkpoints",
+                     vocab_path: str = "vocab.json") -> list[dict]:
     """Every checkpoint on disk, newest step first.
 
     A checkpoint carries its own preset, step and val_loss in its metadata
     (train.py: save_checkpoint), so no sidecar index file is needed and this
     stays correct even for checkpoints written by a run the server never saw.
+
+    Each entry also carries its vocabulary status, because a stale checkpoint
+    should be visible in the list rather than only discovered when a panel
+    refuses it. Costs nothing extra: the metadata is already in hand here.
     """
     directory = REPO_ROOT / out_dir
     if not directory.is_dir():
         return []
+
+    # A missing vocab.json is not an error for listing -- the page still wants
+    # to show what checkpoints exist. Nothing can be verified without it.
+    try:
+        current_fingerprint = load_tokenizer(vocab_path).fingerprint
+    except Exception:  # noqa: BLE001
+        current_fingerprint = None
 
     found = []
     for path in sorted(directory.glob(f"*{CHECKPOINT_SUFFIX}")):
@@ -126,6 +194,10 @@ def list_checkpoints(out_dir: str = "checkpoints") -> list[dict]:
             "step": int(metadata.get("step", 0)),
             "val_loss": float(val_loss) if val_loss else None,
             "size_bytes": path.stat().st_size,
+            "vocab": (
+                _vocab_status(metadata.get("tokenizer_fingerprint"), current_fingerprint)
+                if current_fingerprint is not None else "unverifiable"
+            ),
         })
     return sorted(found, key=lambda entry: entry["step"], reverse=True)
 
@@ -152,7 +224,7 @@ def next_token_distribution(
     silently drift from sample.py.
     """
     model, metadata = _load(checkpoint)
-    tokenizer = _checked_tokenizer(model, checkpoint, vocab_path)
+    tokenizer = _checked_tokenizer(model, metadata, checkpoint, vocab_path)
 
     prompt_ids = tokenizer.encode(prompt) or [0]
     context = prompt_ids[-model.cfg.context_len:]
@@ -228,7 +300,7 @@ def generate_completion(
     them. That rule belongs in one place.
     """
     model, metadata = _load(checkpoint)
-    tokenizer = _checked_tokenizer(model, checkpoint, vocab_path)
+    tokenizer = _checked_tokenizer(model, metadata, checkpoint, vocab_path)
 
     prompt_ids = tokenizer.encode(prompt)
     context_len = model.cfg.context_len
@@ -283,7 +355,7 @@ def attention_grid(
     made visible rather than described.
     """
     model, metadata = _load(checkpoint)
-    tokenizer = _checked_tokenizer(model, checkpoint, vocab_path)
+    tokenizer = _checked_tokenizer(model, metadata, checkpoint, vocab_path)
 
     prompt_ids = tokenizer.encode(prompt) or [0]
     context = prompt_ids[-min(MAX_ATTENTION_TOKENS, model.cfg.context_len):]

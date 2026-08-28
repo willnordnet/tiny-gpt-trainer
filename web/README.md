@@ -91,13 +91,23 @@ badge, because `DESIGN.md` §6.2 treats it as the check you do not train
 without; a green light makes that discipline visible instead of buried in a
 flag. A failing gate exits non-zero and the pipeline stops there.
 
-**Loss.** Train and validation loss, with a dashed line at `ln(vocab_size)` —
-the loss of a model that has learned nothing, so everything below it is real
-learning. When validation loss turns back up while training loss keeps
-falling, the chart marks where that started. On this corpus it happens early
-and hard (the recorded run bottoms out near step 300 at val 4.36 and ends at
-6.40 while train loss reaches 0.47), which makes overfitting something you
-watch rather than read about.
+**Loss.** Both numbers are cross-entropy in *nats*, and **lower is better**:
+zero is perfect prediction, `ln(vocab_size)` = 8.32 is a model that has learned
+nothing. `train` is measured on the batches being learned from right now, so it
+falls almost by construction; `val` (validation) is measured on the 10% of the
+corpus held back in `val.npy`, which the model never trains on, and is the only
+one of the two that can tell learning from memorising. Perplexity, printed
+beside each eval, is just `exp(loss)` -- roughly how many tokens the model is
+choosing between at each position. `val` is also what the checkpoint dropdowns
+show, so the lowest one there is the best model you have; it is comparable only
+across runs sharing a corpus and a vocabulary.
+
+The chart draws both curves against that `ln(vocab_size)` ceiling as a dashed
+line, so everything below it is real learning, and marks the step where
+validation loss turned back up while training loss kept falling. On
+TinyShakespeare that happens early and hard -- the recorded run bottoms out
+near step 300 at val 4.36 and ends at 6.40 while train loss reaches 0.47 --
+which makes overfitting something you watch rather than read about.
 
 **Sample timeline.** The trainer already generates from the same prompt every
 `sample_interval` steps. Drag the scrubber to watch noise become words become
@@ -140,6 +150,17 @@ copy without being mostly whitespace.
 
 ## Things worth knowing
 
+- **Checkpoints name the vocabulary they were trained with.** A checkpoint
+  stores `vocab_size` but not the vocabulary, and every preset targets 4096, so
+  two vocabularies trained on different corpora are indistinguishable by size
+  alone. Reading a checkpoint with the wrong one of them decodes every id into
+  different text without a single error. Checkpoints therefore record the
+  tokenizer's `fingerprint` in their metadata and the panels refuse a
+  mismatch. `list_checkpoints` carries the same verdict, so a stale checkpoint
+  is marked in the dropdown rather than only discovered after picking it. Files
+  written before that field existed report as *unverifiable* rather than being
+  rejected: that is a third state, and calling it "fine" would be exactly the
+  kind of silent wrong answer the guard exists to prevent.
 - **Uploads get their own vocabulary size.** A preset fixes `vocab_size` at
   4096, but a BPE vocab trained on your upload is whatever that corpus could
   support. After the prepare stage the runner reads the real number out of

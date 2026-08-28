@@ -403,6 +403,13 @@ identical, since the batch order is seeded per run.)
 
 ### The loss curve
 
+Both columns are cross-entropy in *nats*, and **lower is better**. Zero would be
+perfect prediction; `ln(vocab_size)` = `ln(4096)` = 8.318 is what a model that
+has learned nothing scores by guessing uniformly. `Train` is measured on the
+batches being learned from, `Val` on the 10% of the corpus held back and never
+trained on. Only `Val` can distinguish learning from memorising, which is the
+whole point of the table below.
+
 | Step | Train | Val | |
 |---|---|---|---|
 | 100 | 4.832 | 4.935 | |

@@ -38,10 +38,22 @@ def test_the_fixtures_actually_agree(tiny_cfg, matching_tokenizer):
     assert matching_tokenizer.vocab_size == tiny_cfg.vocab_size
 
 
+@pytest.fixture
+def same_size_different_vocab() -> BPETokenizer:
+    """vocab_size 258, like matching_tokenizer, but a different merge list.
+
+    This is the case that matters: retraining a vocab on a new corpus targets
+    the same size, so size alone cannot tell the two apart.
+    """
+    return BPETokenizer(merges=[(97, 98), (256, 99)])
+
+
 def test_a_matching_tokenizer_is_accepted(tiny_cfg, matching_tokenizer, monkeypatch):
     model = TinyGPT(tiny_cfg)
     monkeypatch.setattr(introspect, "load_tokenizer", lambda _: matching_tokenizer)
-    assert introspect._checked_tokenizer(model, "ckpt", "vocab.json") is matching_tokenizer
+    meta = {"tokenizer_fingerprint": matching_tokenizer.fingerprint}
+    accepted = introspect._checked_tokenizer(model, meta, "ckpt", "vocab.json")
+    assert accepted is matching_tokenizer
 
 
 def test_a_mismatched_tokenizer_is_refused_rather_than_silently_wrong(
@@ -52,11 +64,92 @@ def test_a_mismatched_tokenizer_is_refused_rather_than_silently_wrong(
     monkeypatch.setattr(introspect, "load_tokenizer", lambda _: wrong)
 
     with pytest.raises(introspect.VocabMismatch) as raised:
-        introspect._checked_tokenizer(model, "checkpoints/x.safetensors", "vocab.json")
+        introspect._checked_tokenizer(model, {}, "checkpoints/x.safetensors", "vocab.json")
 
     # The message has to name both numbers, or it is not actionable.
     assert "257" in str(raised.value)
     assert "258" in str(raised.value)
+
+
+def test_a_same_size_but_different_vocabulary_is_refused_on_its_fingerprint(
+    tiny_cfg, matching_tokenizer, same_size_different_vocab, monkeypatch
+):
+    """The failure vocab_size cannot see.
+
+    Retraining BPE on a new corpus overwrites vocab.json with a vocabulary of
+    the same configured size. Every id stays in range, so the old checkpoint
+    decodes without error into entirely the wrong text. Only the fingerprint
+    distinguishes them.
+    """
+    assert same_size_different_vocab.vocab_size == matching_tokenizer.vocab_size
+    assert same_size_different_vocab.fingerprint != matching_tokenizer.fingerprint
+
+    model = TinyGPT(tiny_cfg)
+    monkeypatch.setattr(introspect, "load_tokenizer", lambda _: same_size_different_vocab)
+    meta = {"tokenizer_fingerprint": matching_tokenizer.fingerprint}
+
+    with pytest.raises(introspect.VocabMismatch) as raised:
+        introspect._checked_tokenizer(model, meta, "checkpoints/x.safetensors", "vocab.json")
+
+    # Both fingerprints, or there is no way to tell which vocab to go find.
+    assert matching_tokenizer.fingerprint in str(raised.value)
+    assert same_size_different_vocab.fingerprint in str(raised.value)
+
+
+@pytest.mark.parametrize("recorded", [None, "", "   "])
+def test_a_checkpoint_without_a_fingerprint_still_loads(
+    tiny_cfg, matching_tokenizer, same_size_different_vocab, monkeypatch, recorded
+):
+    """Checkpoints predate the fingerprint field. Refusing them outright would
+    be a regression on the weak check they used to get, so they fall back to
+    it -- and describe_vocab_match reports them as unverifiable."""
+    model = TinyGPT(tiny_cfg)
+    monkeypatch.setattr(introspect, "load_tokenizer", lambda _: same_size_different_vocab)
+    meta = {} if recorded is None else {"tokenizer_fingerprint": recorded}
+    accepted = introspect._checked_tokenizer(model, meta, "ckpt", "vocab.json")
+    assert accepted is same_size_different_vocab
+
+
+def test_save_checkpoint_records_the_tokenizer_fingerprint(
+    tiny_cfg, matching_tokenizer, tmp_path
+):
+    """Without this the guard above has nothing to compare against."""
+    path = tmp_path / "t-step1.safetensors"
+    save_checkpoint(path, TinyGPT(tiny_cfg), "tiny", 1, 1.5,
+                    tokenizer_fingerprint=matching_tokenizer.fingerprint)
+    _, metadata = mx.load(str(path), return_metadata=True)
+    assert metadata["tokenizer_fingerprint"] == matching_tokenizer.fingerprint
+
+    # Always present, so a reader can distinguish "not recorded" from "old file".
+    plain = tmp_path / "t-step2.safetensors"
+    save_checkpoint(plain, TinyGPT(tiny_cfg), "tiny", 2, None)
+    _, plain_meta = mx.load(str(plain), return_metadata=True)
+    assert plain_meta["tokenizer_fingerprint"] == ""
+
+
+@pytest.mark.parametrize(
+    "recorded_from, expected",
+    [("matching", "verified"), ("other", "mismatched"), (None, "unverifiable")],
+)
+def test_describe_vocab_match_names_the_three_states(
+    tiny_cfg, matching_tokenizer, same_size_different_vocab, tmp_path, monkeypatch,
+    recorded_from, expected,
+):
+    """The viewer needs to tell "fine", "cannot tell" and "wrong" apart, which
+    a raise-or-not guard cannot express on its own."""
+    monkeypatch.setattr(introspect, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(introspect, "load_tokenizer", lambda _: matching_tokenizer)
+
+    fingerprints = {
+        "matching": matching_tokenizer.fingerprint,
+        "other": same_size_different_vocab.fingerprint,
+        None: None,
+    }
+    path = tmp_path / "t-step1.safetensors"
+    save_checkpoint(path, TinyGPT(tiny_cfg), "tiny", 1, 1.5,
+                    tokenizer_fingerprint=fingerprints[recorded_from])
+
+    assert introspect.describe_vocab_match(str(path))["status"] == expected
 
 
 # --- listing checkpoints ---------------------------------------------------
@@ -81,6 +174,28 @@ def test_list_checkpoints_reads_step_and_val_loss_from_metadata(
     assert found[1]["val_loss"] == pytest.approx(1.5)
     assert found[0]["val_loss"] is None  # an absent val loss must not crash
     assert all(entry["preset"] == "tiny" for entry in found)
+
+
+def test_list_checkpoints_flags_a_checkpoint_from_another_vocabulary(
+    tiny_cfg, matching_tokenizer, same_size_different_vocab, tmp_path, monkeypatch
+):
+    """The list is where a stale checkpoint should become visible. Waiting for
+    a panel to refuse it means picking it first and wondering why the output is
+    gibberish."""
+    monkeypatch.setattr(introspect, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(introspect, "load_tokenizer", lambda _: matching_tokenizer)
+    out = tmp_path / "checkpoints"
+    out.mkdir()
+
+    model = TinyGPT(tiny_cfg)
+    save_checkpoint(out / "t-step10.safetensors", model, "tiny", 10, 1.5,
+                    tokenizer_fingerprint=matching_tokenizer.fingerprint)
+    save_checkpoint(out / "t-step20.safetensors", model, "tiny", 20, 1.5,
+                    tokenizer_fingerprint=same_size_different_vocab.fingerprint)
+    save_checkpoint(out / "t-step30.safetensors", model, "tiny", 30, 1.5)
+
+    status = {e["step"]: e["vocab"] for e in introspect.list_checkpoints("checkpoints")}
+    assert status == {10: "verified", 20: "mismatched", 30: "unverifiable"}
 
 
 def test_list_checkpoints_skips_an_unreadable_file(tiny_cfg, tmp_path, monkeypatch):

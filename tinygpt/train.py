@@ -244,7 +244,12 @@ def evaluate(
 
 
 def save_checkpoint(
-    path: Path, model: TinyGPT, preset_name: str, step: int, val_loss: float | None
+    path: Path,
+    model: TinyGPT,
+    preset_name: str,
+    step: int,
+    val_loss: float | None,
+    tokenizer_fingerprint: str | None = None,
 ) -> None:
     """Write weights plus enough metadata to reconstruct the model from scratch.
 
@@ -252,6 +257,15 @@ def save_checkpoint(
     single argument (the path) rather than a path plus a promise that you
     remembered which preset it was, which is the kind of promise that gets
     broken three weeks later.
+
+    tokenizer_fingerprint answers a question the weights cannot: *which*
+    vocabulary do these token ids refer to. A checkpoint stores vocab_size but
+    not the vocabulary, so two different 4096-token vocabularies are
+    indistinguishable from the file alone -- and reading a checkpoint with the
+    wrong one of them produces fluent-looking nonsense rather than an error.
+    It comes from the token shards' meta.json rather than from --vocab, because
+    what matters is the tokenizer that actually built the training data, not
+    whichever vocab.json happened to be on disk for sample previews.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -261,6 +275,9 @@ def save_checkpoint(
         "step": str(step),
         "model_config": json.dumps(asdict(model.cfg)),
         "val_loss": "" if val_loss is None else f"{val_loss:.6f}",
+        # Empty rather than absent when unknown, so the field is always present
+        # and a reader can tell "no fingerprint recorded" from "old file".
+        "tokenizer_fingerprint": tokenizer_fingerprint or "",
     }
 
     mx.save_safetensors(str(path), weights, metadata=metadata)
@@ -447,6 +464,7 @@ def train(
     tokenizer: BPETokenizer | None,
     sample_prompt: str,
     log: RunLogger,
+    tokenizer_fingerprint: str | None = None,
 ) -> None:
     """The real training loop.
 
@@ -561,7 +579,10 @@ def train(
             path = out_dir / f"{preset_name}-step{step + 1}{CHECKPOINT_SUFFIX}"
             if val_loss is None:
                 val_loss = evaluate(model, val_tokens, train_cfg, context_len)
-            save_checkpoint(path, model, preset_name, step + 1, val_loss)
+            save_checkpoint(
+                path, model, preset_name, step + 1, val_loss,
+                tokenizer_fingerprint=tokenizer_fingerprint,
+            )
             log(f"  [checkpoint] {path} (val loss {val_loss:.4f})")
             interval_start = time.perf_counter()
 
@@ -701,6 +722,7 @@ def main() -> None:
             tokenizer=tokenizer,
             sample_prompt=args.prompt,
             log=log,
+            tokenizer_fingerprint=meta.get("tokenizer_fingerprint"),
         )
 
         if log_path is not None:

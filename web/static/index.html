@@ -119,15 +119,32 @@
 
     <dl class="terms">
       <dt>loss</dt>
-      <dd>Cross-entropy in <em>nats</em>: the model's average surprise at the token that actually
-      came next. Lower is better, and <code>ln(vocab_size)</code> is what pure guessing scores.</dd>
+      <dd>Cross-entropy, measured in <em>nats</em>: how surprised the model was by the token that
+      actually came next. <strong>Lower is better.</strong> Zero would be perfect prediction every
+      time; <code>ln(vocab_size)</code> &mdash; 8.32 at a 4096-token vocabulary &mdash; is what a
+      model that has learned nothing scores by spreading its guess evenly over the whole
+      vocabulary. That value is the dashed line, and it is a ceiling, not a target.</dd>
+
       <dt>train</dt>
-      <dd>Loss on the batches the model is being updated on right now. The optimiser is pushing this
-      number down directly, so it falls almost by construction &mdash; it can keep falling long after
-      the model has stopped learning anything general.</dd>
+      <dd>Loss on the batches the model is being updated on right now, averaged over the last
+      logging interval. The optimiser pushes this number down directly, so it falls almost by
+      construction and can keep falling long after the model has stopped learning anything that
+      generalises. On its own it tells you very little.</dd>
+
       <dt>val</dt>
-      <dd>Loss on held-out text the model never trains on. This is the honest one. The gap between
-      it and <code>train</code> is the part the model memorised rather than learned.</dd>
+      <dd>Short for <em>validation</em>: the same measurement, taken on held-out text the model
+      never trains on (10% of the corpus, kept aside in <code>val.npy</code>). This is the honest
+      number, and the gap between it and <code>train</code> is the part the model memorised rather
+      than learned. It is also the figure beside each entry in the checkpoint dropdowns &mdash;
+      <strong>the lowest val loss is your best model, which on a small corpus is usually not the
+      newest one.</strong> Only comparable between runs that share a corpus and a vocabulary.</dd>
+
+      <dt>perplexity</dt>
+      <dd><code>exp(loss)</code>, printed next to every eval in the raw log. Loosely, how many
+      tokens the model is effectively choosing between at each position: a val loss of 4.38 is a
+      perplexity of 80, about as uncertain as picking evenly among 80 candidates. The same
+      information as the loss, on a scale that is easier to feel.</dd>
+
       <dt>tok/s</dt>
       <dd>Throughput: training tokens consumed per second. A speed measure, not a quality one.</dd>
     </dl>

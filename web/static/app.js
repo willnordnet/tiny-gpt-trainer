@@ -505,7 +505,12 @@ async function loadCheckpoints() {
       const option = document.createElement("option");
       option.value = checkpoint.path;
       const val = checkpoint.val_loss === null ? "" : ` · val ${checkpoint.val_loss.toFixed(3)}`;
-      option.textContent = `${checkpoint.preset} step ${checkpoint.step}${val}`;
+      // A checkpoint whose ids belong to a different vocabulary decodes into
+      // fluent nonsense rather than failing, so say so in the list rather than
+      // waiting for a panel to refuse it. "unverifiable" is left unmarked: it
+      // only means the file predates the fingerprint field.
+      const stale = checkpoint.vocab === "mismatched" ? "  ⚠ other vocabulary" : "";
+      option.textContent = `${checkpoint.preset} step ${checkpoint.step}${val}${stale}`;
       select.appendChild(option);
     }
     // Keep the user's choice across a reload if that checkpoint still exists.
