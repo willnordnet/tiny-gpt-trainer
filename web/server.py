@@ -350,8 +350,8 @@ class Handler(BaseHTTPRequestHandler):
         # Resolve the model before writing any headers, so a bad checkpoint or
         # a vocabulary mismatch is still a clean 500 with a JSON error rather
         # than a half-written stream the page has to guess about.
-        model, _ = introspect._load(checkpoint)
-        introspect._checked_tokenizer(model, checkpoint, "vocab.json")
+        model, metadata = introspect._load(checkpoint)
+        introspect._checked_tokenizer(model, metadata, checkpoint, "vocab.json")
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
